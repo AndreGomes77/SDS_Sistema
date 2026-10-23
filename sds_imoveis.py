@@ -5,6 +5,11 @@ import sqlite3
 import pandas as pd
 import streamlit as st
 
+# ---------------------------------------------------------
+# CONFIGURAÇÃO DE SEGURANÇA (CHAVE DEFINIDA)
+# ---------------------------------------------------------
+CHAVE_MESTRA_CEO = "SDS2026#ADM"
+
 # Configuração da Página
 st.set_page_config(
     page_title="SDS Imóveis - Gestão e Dashboard",
@@ -74,7 +79,7 @@ st.markdown(
         color: white;
     }
 
-    /* Ajustes para Telas Menores (Celular) */
+    /* Ajustes Responsivos para Celular */
     @media (max-width: 768px) {
         .stApp {
             padding: 5px;
@@ -252,12 +257,30 @@ if not st.session_state["autenticado"]:
       novo_user = st.text_input("Escolha um Nome de Utilizador")
       nova_senha = st.text_input("Escolha uma Senha", type="password")
       novo_cargo = st.selectbox(
-          "Cargo", ["CEO / Administração", "Corretor", "Funcionário"]
+          "Cargo Pretendido", ["Corretor", "Funcionário", "CEO / Administração"]
       )
-      btn_reg = st.form_submit_button("Registrar")
+
+      # Campo obrigatório para validar o acesso de diretoria
+      chave_adm_input = st.text_input(
+          "Chave de Segurança ADM (Obrigatório apenas para CEO /"
+          " Administração)",
+          type="password",
+          help="Exigida para liberar privilégios de diretoria.",
+      )
+
+      btn_reg = st.form_submit_button("Registrar Conta")
 
       if btn_reg:
         if novo_user and nova_senha:
+          # Trava de Segurança para CEO / ADM
+          if novo_cargo == "CEO / Administração":
+            if chave_adm_input != CHAVE_MESTRA_CEO:
+              st.error(
+                  "⛔ Chave de Segurança ADM incorreta! Registro de CEO /"
+                  " Administração bloqueado."
+              )
+              st.stop()
+
           try:
             conn = sqlite3.connect("sds_imoveis.db")
             cursor = conn.cursor()
@@ -270,11 +293,11 @@ if not st.session_state["autenticado"]:
             )
             conn.commit()
             conn.close()
-            st.success("Registro efetuado com sucesso!")
+            st.success("Registro efetuado com sucesso! Faça login.")
           except sqlite3.IntegrityError:
             st.error("Este nome de utilizador já existe.")
         else:
-          st.error("Preencha todos os campos.")
+          st.error("Preencha todos os campos obrigatórios.")
 
   with aba_esqueci:
     st.subheader("Redefinir / Esqueci a Senha")
@@ -332,6 +355,7 @@ st.sidebar.markdown(f"**Utilizador:** {st.session_state['usuario']}")
 st.sidebar.markdown(f"**Cargo:** {st.session_state['cargo']}")
 st.sidebar.markdown("---")
 
+# Restrição do Menu pelo Cargo
 if st.session_state["cargo"] == "CEO / Administração":
   opcoes_menu = [
       "Dashboard",
@@ -342,17 +366,12 @@ if st.session_state["cargo"] == "CEO / Administração":
       "🧮 Calculadora",
   ]
 else:
-  opcoes_menu = [
-      "Dashboard",
-      "Gestão de Demanda",
-      "👥 Gerenciar Usuários",
-      "🧮 Calculadora",
-  ]
+  opcoes_menu = ["Dashboard", "Gestão de Demanda", "🧮 Calculadora"]
 
 menu = st.sidebar.selectbox("Navegação", opcoes_menu)
 
 # ---------------------------------------------------------
-# CALCULADORA RÁPIDA NA BARRA LATERAL (EXPANSÍVEL)
+# CALCULADORA RÁPIDA NA BARRA LATERAL
 # ---------------------------------------------------------
 st.sidebar.markdown("---")
 with st.sidebar.expander("🧮 Calculadora Rápida", expanded=False):
@@ -746,7 +765,7 @@ elif menu == "Gestão de Demanda":
     st.info("Nenhum registo encontrado.")
 
 # ---------------------------------------------------------
-# 3. FATURAMENTO (APENAS PARA CEO / ADMINISTRAÇÃO)
+# 3. FATURAMENTO (EXCLUSIVO CEO / ADM)
 # ---------------------------------------------------------
 elif menu == "Faturamento":
   st.title("💰 Controle de Faturamento (Mensal e Anual)")
@@ -820,7 +839,7 @@ elif menu == "Faturamento":
     st.info("Sem dados financeiros disponíveis.")
 
 # ---------------------------------------------------------
-# 4. RELATÓRIOS (APENAS PARA CEO / ADMINISTRAÇÃO)
+# 4. RELATÓRIOS (EXCLUSIVO CEO / ADM)
 # ---------------------------------------------------------
 elif menu == "Relatórios":
   st.title("📈 Relatórios e Exportação Avançada")
@@ -917,7 +936,7 @@ elif menu == "Relatórios":
     st.info("Não há dados disponíveis para gerar relatórios.")
 
 # ---------------------------------------------------------
-# 5. GERENCIAR USUÁRIOS
+# 5. GERENCIAR USUÁRIOS (EXCLUSIVO CEO / ADM)
 # ---------------------------------------------------------
 elif menu == "👥 Gerenciar Usuários":
   st.title("👥 Gerenciamento de Usuários e Acessos")
@@ -931,7 +950,7 @@ elif menu == "👥 Gerenciar Usuários":
   st.dataframe(df_users, use_container_width=True)
 
   st.markdown("---")
-  st.subheader("⚙️ Alterar Dados ou Senha de um Usuário")
+  st.subheader("⚙️ Alterar Dados, Cargo ou Senha de um Usuário")
 
   col_u1, col_u2 = st.columns(2)
   with col_u1:
