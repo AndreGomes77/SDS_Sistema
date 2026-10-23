@@ -79,7 +79,6 @@ st.markdown(
         color: white;
     }
 
-    /* Ajustes Responsivos para Celular */
     @media (max-width: 768px) {
         .stApp {
             padding: 5px;
@@ -107,6 +106,19 @@ def init_db():
   conn = sqlite3.connect("sds_imoveis.db")
   cursor = conn.cursor()
 
+  # Garante reconstrução limpa se a tabela antiga estiver incompatível
+  try:
+    cursor.execute("PRAGMA table_info(demandas)")
+    colunas_existentes = [coluna[1] for coluna in cursor.fetchall()]
+
+    if (
+        "tipo_servico" not in colunas_existentes
+        or "status_parceiro" not in colunas_existentes
+    ) and len(colunas_existentes) > 0:
+      cursor.execute("DROP TABLE demandas")
+  except Exception:
+    pass
+
   # Tabela de Demandas
   cursor.execute("""
         CREATE TABLE IF NOT EXISTS demandas (
@@ -127,22 +139,6 @@ def init_db():
             status_parceiro TEXT DEFAULT 'Pendente'
         )
     """)
-
-  # Adiciona tipo_servico automaticamente em bancos legados
-  cursor.execute("PRAGMA table_info(demandas)")
-  colunas = [coluna[1] for coluna in cursor.fetchall()]
-
-  colunas_novas = {
-      "tipo_servico": "TEXT DEFAULT 'Intermediação'",
-      "status_parceiro": "TEXT DEFAULT 'Pendente'",
-  }
-
-  for col, tipo in colunas_novas.items():
-    if col not in colunas and len(colunas) > 0:
-      try:
-        cursor.execute(f"ALTER TABLE demandas ADD COLUMN {col} {tipo}")
-      except sqlite3.OperationalError:
-        pass
 
   # Tabela de Utilizadores
   cursor.execute("""
@@ -399,7 +395,6 @@ st.sidebar.markdown(f"**Utilizador:** {st.session_state['usuario']}")
 st.sidebar.markdown(f"**Cargo:** {st.session_state['cargo']}")
 st.sidebar.markdown("---")
 
-# Restrição do Menu pelo Cargo
 if st.session_state["cargo"] == "CEO / Administração":
   opcoes_menu = [
       "Dashboard",
@@ -590,7 +585,11 @@ elif menu == "Gestão de Demanda":
         cursor = conn.cursor()
         cursor.execute(
             """
-                    INSERT INTO demandas (adquirente, numero_imovel, responsavel, status, prazo, valor, taxa_desc, pagamento, tipo_imovel, tipo_servico, parceria, parceiro_nome, pct_sds, status_parceiro)
+                    INSERT INTO demandas (
+                        adquirente, numero_imovel, responsavel, status, prazo, 
+                        valor, taxa_desc, pagamento, tipo_imovel, tipo_servico, 
+                        parceria, parceiro_nome, pct_sds, status_parceiro
+                    )
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Pendente')
                 """,
             (
@@ -1207,7 +1206,10 @@ elif menu == "👔 Pagamentos de Funcionários":
         cursor = conn.cursor()
         cursor.execute(
             """
-                    INSERT INTO pagamentos_equipe (funcionario, mes, ano, salario_base, transporte, almoco, bonus, descontos, total_calculado, status_pagamento, data_registro)
+                    INSERT INTO pagamentos_equipe (
+                        funcionario, mes, ano, salario_base, transporte, almoco, 
+                        bonus, descontos, total_calculado, status_pagamento, data_registro
+                    )
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
             (
