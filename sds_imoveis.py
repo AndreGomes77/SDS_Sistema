@@ -127,7 +127,7 @@ def init_db():
         )
     """)
 
-  # Garantir atualizações de schema (adicionar colunas novas se a tabela já existir)
+  # Garantir atualizações de colunas na tabela demandas de forma segura
   cursor.execute("PRAGMA table_info(demandas)")
   colunas = [coluna[1] for coluna in cursor.fetchall()]
 
@@ -144,7 +144,10 @@ def init_db():
 
   for col, tipo in colunas_para_adicionar.items():
     if col not in colunas:
-      cursor.execute(f"ALTER TABLE demandas ADD COLUMN {col} {tipo}")
+      try:
+        cursor.execute(f"ALTER TABLE demandas ADD COLUMN {col} {tipo}")
+      except sqlite3.OperationalError:
+        pass
 
   # Tabela de Utilizadores
   cursor.execute("""
@@ -169,7 +172,7 @@ def init_db():
         )
     """)
 
-  # Tabela de Pagamentos de Funcionários (Folha e Benefícios)
+  # Tabela de Pagamentos de Funcionários
   cursor.execute("""
         CREATE TABLE IF NOT EXISTS pagamentos_equipe (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -580,26 +583,39 @@ elif menu == "Gestão de Demanda":
       if adquirente and numero_imovel and responsavel:
         conn = sqlite3.connect("sds_imoveis.db")
         cursor = conn.cursor()
-        cursor.execute(
-            """
-                    INSERT INTO demandas (adquirente, numero_imovel, responsavel, status, prazo, valor, taxa_desc, pagamento, tipo_imovel, parceria, parceiro_nome, pct_sds, status_parceiro)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Pendente')
-                """,
-            (
-                adquirente,
-                numero_imovel,
-                responsavel,
-                status,
-                str(prazo),
-                valor,
-                taxa_desc,
-                pagamento,
-                tipo_imovel,
-                parceria,
-                parceiro_nome if parceria == "Sim" else "",
-                pct_sds,
-            ),
+
+        # Inserção Dinâmica para Evitar Erros de Colunas Ausentes no SQLite
+        cursor.execute("PRAGMA table_info(demandas)")
+        cols_existentes = [col[1] for col in cursor.fetchall()]
+
+        dados_insercao = {
+            "adquirente": adquirente,
+            "numero_imovel": numero_imovel,
+            "responsavel": responsavel,
+            "status": status,
+            "prazo": str(prazo),
+            "valor": valor,
+            "taxa_desc": taxa_desc,
+            "pagamento": pagamento,
+            "tipo_imovel": tipo_imovel,
+            "parceria": parceria,
+            "parceiro_nome": parceiro_nome if parceria == "Sim" else "",
+            "pct_sds": pct_sds,
+            "status_parceiro": "Pendente",
+        }
+
+        # Filtra apenas colunas que realmente existem na tabela atual
+        cols_validas = [k for k in dados_insercao.keys() if k in cols_existentes]
+        valores_validos = [dados_insercao[k] for k in cols_validas]
+
+        campos_sql = ", ".join(cols_validas)
+        placeholders = ", ".join(["?"] * len(cols_validas))
+
+        sql_query = (
+            f"INSERT INTO demandas ({campos_sql}) VALUES ({placeholders})"
         )
+        cursor.execute(sql_query, valores_validos)
+
         conn.commit()
         conn.close()
         st.success("Demanda cadastrada com sucesso!")
@@ -1097,7 +1113,7 @@ elif menu == "💸 Gestão de Gastos":
       st.success(f"Gasto ID {id_gasto_del} removido com sucesso!")
       st.rerun()
   else:
-    st.info("Nenhum gasto ou despesa cadastrado ainda.")
+    st.info("Nenum gasto ou despesa cadastrado ainda.")
 
 # ---------------------------------------------------------
 # 6. PAGAMENTOS DE FUNCIONÁRIOS (EXCLUSIVO CEO / ADM)
