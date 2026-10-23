@@ -127,13 +127,24 @@ def init_db():
         )
     """)
 
+  # Garantir atualizações de schema (adicionar colunas novas se a tabela já existir)
   cursor.execute("PRAGMA table_info(demandas)")
   colunas = [coluna[1] for coluna in cursor.fetchall()]
-  if "status_parceiro" not in colunas:
-    cursor.execute(
-        "ALTER TABLE demandas ADD COLUMN status_parceiro TEXT DEFAULT"
-        " 'Pendente'"
-    )
+
+  colunas_para_adicionar = {
+      "adquirente": "TEXT DEFAULT ''",
+      "numero_imovel": "TEXT DEFAULT ''",
+      "taxa_desc": "REAL DEFAULT 0.0",
+      "tipo_imovel": "TEXT DEFAULT 'Caixa'",
+      "parceria": "TEXT DEFAULT 'Não'",
+      "parceiro_nome": "TEXT DEFAULT ''",
+      "pct_sds": "REAL DEFAULT 100.0",
+      "status_parceiro": "TEXT DEFAULT 'Pendente'",
+  }
+
+  for col, tipo in colunas_para_adicionar.items():
+    if col not in colunas:
+      cursor.execute(f"ALTER TABLE demandas ADD COLUMN {col} {tipo}")
 
   # Tabela de Utilizadores
   cursor.execute("""
@@ -897,14 +908,12 @@ elif menu == "🤝 Controle de Repasse a Parceiros":
     df_parcerias = df[df["parceria"] == "Sim"].copy()
 
     if not df_parcerias.empty:
-      # Repasses pendentes (Comissão recebida pela SDS, mas ainda não paga ao parceiro)
       df_pendentes_parc = df_parcerias[
           (df_parcerias["pagamento"] == "Recebido")
           & (df_parcerias["status_parceiro"] == "Pendente")
       ]
       total_devido_parceiros = df_pendentes_parc["Lucro_Parceiro (R$)"].sum()
 
-      # Repasses já concluídos
       df_pagos_parc = df_parcerias[df_parcerias["status_parceiro"] == "Pago"]
       total_ja_pago_parceiros = df_pagos_parc["Lucro_Parceiro (R$)"].sum()
 
@@ -985,7 +994,6 @@ elif menu == "💸 Gestão de Gastos":
   st.title("💸 Controle de Gastos e Despesas da Empresa")
   st.write("Cadastre e acompanhe os custos fixos e variáveis da SDS Imóveis.")
 
-  # Form de Cadastro de Gastos
   with st.form("form_gastos", clear_on_submit=True):
     st.subheader("➕ Cadastrar Novo Gasto / Despesa")
     col_g1, col_g2 = st.columns(2)
