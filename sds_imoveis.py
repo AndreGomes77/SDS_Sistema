@@ -107,6 +107,7 @@ def init_db():
   conn = sqlite3.connect("sds_imoveis.db")
   cursor = conn.cursor()
 
+  # Tabela de Demandas
   cursor.execute("""
         CREATE TABLE IF NOT EXISTS demandas (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -156,12 +157,26 @@ def init_db():
         "ALTER TABLE demandas ADD COLUMN pct_sds REAL DEFAULT 100.0"
     )
 
+  # Tabela de Utilizadores
   cursor.execute("""
         CREATE TABLE IF NOT EXISTS utilizadores (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             usuario TEXT UNIQUE NOT NULL,
             senha TEXT NOT NULL,
             cargo TEXT NOT NULL
+        )
+    """)
+
+  # Tabela de Gastos da Empresa
+  cursor.execute("""
+        CREATE TABLE IF NOT EXISTS gastos (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            descricao TEXT NOT NULL,
+            tipo TEXT NOT NULL,
+            categoria TEXT NOT NULL,
+            valor REAL DEFAULT 0.0,
+            data_gasto DATE NOT NULL,
+            status TEXT DEFAULT 'Pago'
         )
     """)
 
@@ -202,6 +217,17 @@ def carregar_dados():
     df["lucro_SDS"] = df["valor_liquido"] * (df["pct_sds"] / 100.0)
     df["Lucro_Parceiro (R$)"] = df["valor_liquido"] - df["lucro_SDS"]
   return df
+
+
+def carregar_gastos():
+  conn = sqlite3.connect("sds_imoveis.db")
+  df_g = pd.read_sql("SELECT * FROM gastos", conn)
+  conn.close()
+  if not df_g.empty:
+    df_g["data_gasto"] = pd.to_datetime(df_g["data_gasto"])
+    df_g["Ano"] = df_g["data_gasto"].dt.year
+    df_g["Mês"] = df_g["data_gasto"].dt.month
+  return df_g
 
 
 # ---------------------------------------------------------
@@ -260,7 +286,6 @@ if not st.session_state["autenticado"]:
           "Cargo Pretendido", ["Corretor", "Funcionário", "CEO / Administração"]
       )
 
-      # Campo obrigatório para validar o acesso de diretoria
       chave_adm_input = st.text_input(
           "Chave de Segurança ADM (Obrigatório apenas para CEO /"
           " Administração)",
@@ -272,7 +297,6 @@ if not st.session_state["autenticado"]:
 
       if btn_reg:
         if novo_user and nova_senha:
-          # Trava de Segurança para CEO / ADM
           if novo_cargo == "CEO / Administração":
             if chave_adm_input != CHAVE_MESTRA_CEO:
               st.error(
@@ -355,12 +379,13 @@ st.sidebar.markdown(f"**Utilizador:** {st.session_state['usuario']}")
 st.sidebar.markdown(f"**Cargo:** {st.session_state['cargo']}")
 st.sidebar.markdown("---")
 
-# Restrição do Menu pelo Cargo
+# Restrição do Menu pelo Cargo (Aba Gestão de Gastos incluída apenas para CEO)
 if st.session_state["cargo"] == "CEO / Administração":
   opcoes_menu = [
       "Dashboard",
       "Gestão de Demanda",
       "Faturamento",
+      "💸 Gestão de Gastos",
       "Relatórios",
       "👥 Gerenciar Usuários",
       "🧮 Calculadora",
@@ -768,31 +793,29 @@ elif menu == "Gestão de Demanda":
 # 3. FATURAMENTO (EXCLUSIVO CEO / ADM)
 # ---------------------------------------------------------
 elif menu == "Faturamento":
-  st.title("💰 Controle de Faturamento (Mensal e Anual)")
+  st.title("💰 Controle de Faturamento e Lucro Líquido Real")
 
   df = carregar_dados()
+  df_g = carregar_gastos()
 
   if not df.empty:
     anos_disponiveis = sorted(df["Ano"].dropna().unique(), reverse=True)
     ano_selecionado = st.selectbox("Filtrar por Ano", anos_disponiveis)
 
     df_ano = df[df["Ano"] == ano_selecionado]
+    df_g_ano = df_g[df_g["Ano"] == ano_selecionado] if not df_g.empty else pd.DataFrame()
 
-    total_recebido_sds = df_ano[df_ano["pagamento"] == "Recebido"][
-        "lucro_SDS"
-    ].sum()
-    total_pendente_sds = df_ano[df_ano["pagamento"] == "Pendente"][
-        "lucro_SDS"
-    ].sum()
-    total_parceiros = df_ano[df_ano["pagamento"] == "Recebido"][
-        "Lucro_Parceiro (R$)"
-    ].sum()
+    total_recebido_sds = df_ano[df_ano["pagamento"] == "Recebido"]["lucro_SDS"].sum()
+    total_pendente_sds = df_ano[df_ano["pagamento"] == "Pendente"]["lucro_SDS"].sum()
+    total_gastos = df_g_ano["valor"].sum() if not df_g_ano.empty else 0.0
+    lucro_real = total_recebido_sds - total_gastos
 
-    st.subheader(f"📅 Resumo do Ano: {ano_selecionado} (Líquido SDS)")
-    col1, col2, col3 = st.columns([1, 1, 1])
-    col1.metric("Recebido SDS", f"R$ {total_recebido_sds:,.2f}")
-    col2.metric("Pendente SDS", f"R$ {total_pendente_sds:,.2f}")
-    col3.metric("Repassado a Parceiros", f"R$ {total_parceiros:,.2f}")
+    st.subheader(f"📅 Resumo Financeiro do Ano: {ano_selecionado}")
+    col1, col2, col3, col4 = st.columns([1, 1, 1, 1])
+    col1.metric("Recebido SDS (Bruto Líquido)", f"R$ {total_recebido_sds:,.2f}")
+    col2.metric("Total de Gastos", f"R$ {total_gastos:,.2f}")
+    col3.metric("Lucro Real SDS (Entradas - Gastos)", f"R$ {lucro_real:,.2f}")
+    col4.metric("Pendente a Receber SDS", f"R$ {total_pendente_sds:,.2f}")
 
     st.markdown("---")
     st.subheader("📊 Faturamento SDS por Mês")
@@ -800,16 +823,20 @@ elif menu == "Faturamento":
     resumo_mensal = []
     for m in range(1, 13):
       df_mes = df_ano[df_ano["Mês"] == m]
+      df_g_mes = df_g_ano[df_g_ano["Mês"] == m] if not df_g_ano.empty else pd.DataFrame()
+
       rec_mes = df_mes[df_mes["pagamento"] == "Recebido"]["lucro_SDS"].sum()
       pend_mes = df_mes[df_mes["pagamento"] == "Pendente"]["lucro_SDS"].sum()
-      total_mes = rec_mes + pend_mes
+      gastos_mes = df_g_mes["valor"].sum() if not df_g_mes.empty else 0.0
+      lucro_mes = rec_mes - gastos_mes
 
-      if not df_mes.empty or rec_mes > 0 or pend_mes > 0:
+      if not df_mes.empty or rec_mes > 0 or pend_mes > 0 or gastos_mes > 0:
         resumo_mensal.append({
             "Mês": meses_nomes[m],
             "Recebido SDS (R$)": rec_mes,
+            "Gastos (R$)": gastos_mes,
+            "Lucro Real Mês (R$)": lucro_mes,
             "Pendente SDS (R$)": pend_mes,
-            "Total SDS Mês (R$)": total_mes,
         })
 
     if resumo_mensal:
@@ -819,45 +846,106 @@ elif menu == "Faturamento":
       st.info(f"Sem movimentações registadas para o ano {ano_selecionado}.")
 
     st.markdown("---")
-    st.subheader(f"Detalhamento de Lançamentos ({ano_selecionado})")
+    st.subheader(f"Detalhamento de Entradas ({ano_selecionado})")
     cols_fat = [
-        "id",
-        "adquirente",
-        "numero_imovel",
-        "responsavel",
-        "tipo_imovel",
-        "parceiro_nome",
-        "valor",
-        "taxa_desc",
-        "valor_liquido",
-        "pct_sds",
-        "lucro_SDS",
-        "pagamento",
+        "id", "adquirente", "numero_imovel", "responsavel", "tipo_imovel",
+        "parceiro_nome", "valor", "taxa_desc", "valor_liquido", "pct_sds",
+        "lucro_SDS", "pagamento"
     ]
     st.dataframe(df_ano[cols_fat], use_container_width=True)
   else:
     st.info("Sem dados financeiros disponíveis.")
 
 # ---------------------------------------------------------
-# 4. RELATÓRIOS (EXCLUSIVO CEO / ADM)
+# 4. GESTÃO DE GASTOS (NOVA ABA EXCLUSIVA CEO / ADM)
+# ---------------------------------------------------------
+elif menu == "💸 Gestão de Gastos":
+  st.title("💸 Controle de Gastos e Despesas da Empresa")
+  st.write("Cadastre e acompanhe os custos fixos e variáveis da SDS Imóveis.")
+
+  # Form de Cadastro de Gastos
+  with st.form("form_gastos", clear_on_submit=True):
+    st.subheader("➕ Cadastrar Novo Gasto / Despesa")
+    col_g1, col_g2 = st.columns(2)
+    with col_g1:
+      desc_gasto = st.text_input("Descrição do Gasto (Ex: Aluguel, Anúncio Meta, Contador)")
+      valor_gasto = st.number_input("Valor do Gasto (R$)", min_value=0.0, format="%.2f")
+      data_gasto = st.date_input("Data do Pagamento / Vencimento", datetime.date.today())
+    with col_g2:
+      tipo_gasto = st.selectbox("Tipo de Gasto", ["Fixo", "Variável"])
+      categoria_gasto = st.selectbox("Categoria", [
+          "Infraestrutura / Aluguel", "Marketing / Anúncios", "Sistemas / Software",
+          "Impostos / Contador", "Manutenção / Material", "Outros"
+      ])
+      status_gasto = st.selectbox("Status", ["Pago", "Pendente"])
+
+    submit_gasto = st.form_submit_button("Salvar Despesa")
+
+    if submit_gasto:
+      if desc_gasto and valor_gasto > 0:
+        conn = sqlite3.connect("sds_imoveis.db")
+        cursor = conn.cursor()
+        cursor.execute("""
+            INSERT INTO gastos (descricao, tipo, categoria, valor, data_gasto, status)
+            VALUES (?, ?, ?, ?, ?, ?)
+        """, (desc_gasto, tipo_gasto, categoria_gasto, valor_gasto, str(data_gasto), status_gasto))
+        conn.commit()
+        conn.close()
+        st.success("Gasto cadastrado com sucesso!")
+        st.rerun()
+      else:
+        st.error("Preencha a descrição e informe um valor maior que zero.")
+
+  st.markdown("---")
+
+  df_g = carregar_gastos()
+
+  if not df_g.empty:
+    anos_gastos = sorted(df_g["Ano"].dropna().unique(), reverse=True)
+    ano_filtro_g = st.selectbox("Filtrar Gastos por Ano", anos_gastos)
+
+    df_g_filtrado = df_g[df_g["Ano"] == ano_filtro_g]
+
+    total_fixos = df_g_filtrado[df_g_filtrado["tipo"] == "Fixo"]["valor"].sum()
+    total_variaveis = df_g_filtrado[df_g_filtrado["tipo"] == "Variável"]["valor"].sum()
+    total_geral_gastos = df_g_filtrado["valor"].sum()
+
+    col_m1, col_m2, col_m3 = st.columns(3)
+    col_m1.metric("Total de Gastos Fixos", f"R$ {total_fixos:,.2f}")
+    col_m2.metric("Total de Gastos Variáveis", f"R$ {total_variaveis:,.2f}")
+    col_m3.metric("Total Geral de Despesas", f"R$ {total_geral_gastos:,.2f}")
+
+    st.markdown("---")
+    st.subheader("📋 Tabela de Gastos Registrados")
+    st.dataframe(df_g_filtrado[["id", "descricao", "tipo", "categoria", "valor", "data_gasto", "status"]], use_container_width=True)
+
+    st.markdown("---")
+    st.subheader("🗑️ Excluir Registro de Gasto")
+    id_gasto_del = st.selectbox("Selecione o ID do Gasto para Excluir", df_g_filtrado["id"].tolist())
+    if st.button("Excluir Este Gasto"):
+      conn = sqlite3.connect("sds_imoveis.db")
+      cursor = conn.cursor()
+      cursor.execute("DELETE FROM gastos WHERE id = ?", (id_gasto_del,))
+      conn.commit()
+      conn.close()
+      st.success(f"Gasto ID {id_gasto_del} removido com sucesso!")
+      st.rerun()
+  else:
+    st.info("Nenhum gasto ou despesa cadastrado ainda.")
+
+# ---------------------------------------------------------
+# 5. RELATÓRIOS (EXCLUSIVO CEO / ADM)
 # ---------------------------------------------------------
 elif menu == "Relatórios":
   st.title("📈 Relatórios e Exportação Avançada")
-  st.write(
-      "Visualize o resumo analítico e descarregue os relatórios completos da"
-      " imobiliária."
-  )
+  st.write("Visualize o resumo analítico e descarregue os relatórios completos da imobiliária.")
 
   df = carregar_dados()
 
   if not df.empty:
     total_geral_sds = df["lucro_SDS"].sum()
-    total_geral_recebido = df[df["pagamento"] == "Recebido"][
-        "lucro_SDS"
-    ].sum()
-    total_geral_pendente = df[df["pagamento"] == "Pendente"][
-        "lucro_SDS"
-    ].sum()
+    total_geral_recebido = df[df["pagamento"] == "Recebido"]["lucro_SDS"].sum()
+    total_geral_pendente = df[df["pagamento"] == "Pendente"]["lucro_SDS"].sum()
 
     col1, col2, col3 = st.columns([1, 1, 1])
     col1.metric("Lucro SDS Total Registado", f"R$ {total_geral_sds:,.2f}")
@@ -870,19 +958,11 @@ elif menu == "Relatórios":
     col_f1, col_f2, col_f3, col_f4 = st.columns(4)
 
     with col_f1:
-      status_filtro = st.selectbox(
-          "Status Demanda",
-          ["Todos", "Pendente", "Em Andamento", "Concluída", "Atrasada"],
-      )
+      status_filtro = st.selectbox("Status Demanda", ["Todos", "Pendente", "Em Andamento", "Concluída", "Atrasada"])
     with col_f2:
-      pag_filtro = st.selectbox(
-          "Status Pagamento", ["Todos", "Recebido", "Pendente"]
-      )
+      pag_filtro = st.selectbox("Status Pagamento", ["Todos", "Recebido", "Pendente"])
     with col_f3:
-      tipo_filtro = st.selectbox(
-          "Tipo de Imóvel",
-          ["Todos", "Caixa", "Tenda", "Novo", "Usado", "Outros"],
-      )
+      tipo_filtro = st.selectbox("Tipo de Imóvel", ["Todos", "Caixa", "Tenda", "Novo", "Usado", "Outros"])
     with col_f4:
       parc_filtro = st.selectbox("Apenas Parcerias?", ["Todos", "Sim", "Não"])
 
@@ -898,20 +978,9 @@ elif menu == "Relatórios":
 
     st.subheader("📋 Pré-visualização do Relatório Filtrado")
     cols_rel = [
-        "id",
-        "adquirente",
-        "numero_imovel",
-        "responsavel",
-        "tipo_imovel",
-        "parceiro_nome",
-        "valor",
-        "taxa_desc",
-        "valor_liquido",
-        "pct_sds",
-        "lucro_SDS",
-        "Lucro_Parceiro (R$)",
-        "status",
-        "pagamento",
+        "id", "adquirente", "numero_imovel", "responsavel", "tipo_imovel",
+        "parceiro_nome", "valor", "taxa_desc", "valor_liquido", "pct_sds",
+        "lucro_SDS", "Lucro_Parceiro (R$)", "status", "pagamento"
     ]
     st.dataframe(df_filtrado[cols_rel], use_container_width=True)
 
@@ -919,24 +988,20 @@ elif menu == "Relatórios":
 
     output = BytesIO()
     with pd.ExcelWriter(output, engine="openpyxl") as writer:
-      df_filtrado.to_excel(
-          writer, index=False, sheet_name="Relatorio_SDS_Imoveis"
-      )
+      df_filtrado.to_excel(writer, index=False, sheet_name="Relatorio_SDS_Imoveis")
     excel_data = output.getvalue()
 
     st.download_button(
         label="📥 Baixar Relatório Filtrado em Excel",
         data=excel_data,
         file_name="relatorio_detalhado_sds.xlsx",
-        mime=(
-            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-        ),
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     )
   else:
     st.info("Não há dados disponíveis para gerar relatórios.")
 
 # ---------------------------------------------------------
-# 5. GERENCIAR USUÁRIOS (EXCLUSIVO CEO / ADM)
+# 6. GERENCIAR USUÁRIOS (EXCLUSIVO CEO / ADM)
 # ---------------------------------------------------------
 elif menu == "👥 Gerenciar Usuários":
   st.title("👥 Gerenciamento de Usuários e Acessos")
@@ -954,9 +1019,7 @@ elif menu == "👥 Gerenciar Usuários":
 
   col_u1, col_u2 = st.columns(2)
   with col_u1:
-    user_sel = st.selectbox(
-        "Selecione o Usuário para Alterar", df_users["usuario"].tolist()
-    )
+    user_sel = st.selectbox("Selecione o Usuário para Alterar", df_users["usuario"].tolist())
 
   user_info = df_users[df_users["usuario"] == user_sel].iloc[0]
 
@@ -964,14 +1027,10 @@ elif menu == "👥 Gerenciar Usuários":
     novo_cargo_user = st.selectbox(
         "Cargo do Usuário",
         ["CEO / Administração", "Corretor", "Funcionário"],
-        index=["CEO / Administração", "Corretor", "Funcionário"].index(
-            user_info["cargo"]
-        ),
+        index=["CEO / Administração", "Corretor", "Funcionário"].index(user_info["cargo"]),
     )
 
-  nova_senha_user = st.text_input(
-      "Nova Senha (deixe em branco se não quiser alterar)", type="password"
-  )
+  nova_senha_user = st.text_input("Nova Senha (deixe em branco se não quiser alterar)", type="password")
 
   col_b1, col_b2 = st.columns(2)
   with col_b1:
@@ -979,15 +1038,9 @@ elif menu == "👥 Gerenciar Usuários":
       conn = sqlite3.connect("sds_imoveis.db")
       cursor = conn.cursor()
       if nova_senha_user.strip():
-        cursor.execute(
-            "UPDATE utilizadores SET cargo = ?, senha = ? WHERE usuario = ?",
-            (novo_cargo_user, nova_senha_user, user_sel),
-        )
+        cursor.execute("UPDATE utilizadores SET cargo = ?, senha = ? WHERE usuario = ?", (novo_cargo_user, nova_senha_user, user_sel))
       else:
-        cursor.execute(
-            "UPDATE utilizadores SET cargo = ? WHERE usuario = ?",
-            (novo_cargo_user, user_sel),
-        )
+        cursor.execute("UPDATE utilizadores SET cargo = ? WHERE usuario = ?", (novo_cargo_user, user_sel))
       conn.commit()
       conn.close()
       st.success(f"Dados do usuário '{user_sel}' atualizados com sucesso!")
@@ -1000,16 +1053,14 @@ elif menu == "👥 Gerenciar Usuários":
       else:
         conn = sqlite3.connect("sds_imoveis.db")
         cursor = conn.cursor()
-        cursor.execute(
-            "DELETE FROM utilizadores WHERE usuario = ?", (user_sel,)
-        )
+        cursor.execute("DELETE FROM utilizadores WHERE usuario = ?", (user_sel,))
         conn.commit()
         conn.close()
         st.success(f"Usuário '{user_sel}' removido com sucesso!")
         st.rerun()
 
 # ---------------------------------------------------------
-# 6. CALCULADORA COMPLETA DEDICADA
+# 7. CALCULADORA COMPLETA DEDICADA
 # ---------------------------------------------------------
 elif menu == "🧮 Calculadora":
   st.title("🧮 Calculadora Financeira e Contábil SDS")
@@ -1020,9 +1071,7 @@ elif menu == "🧮 Calculadora":
   with col_ca1:
     st.subheader("1. Cálculo de Desconto / Taxa Imposto")
     v_bruto = st.number_input("Valor Bruto (R$)", min_value=0.0, value=1500.0)
-    tx_pct = st.number_input(
-        "Taxa (%)", min_value=0.0, max_value=100.0, value=14.45
-    )
+    tx_pct = st.number_input("Taxa (%)", min_value=0.0, max_value=100.0, value=14.45)
 
     v_desconto = v_bruto * (tx_pct / 100.0)
     v_liq = v_bruto - v_desconto
