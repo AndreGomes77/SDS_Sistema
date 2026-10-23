@@ -1,0 +1,1022 @@
+import datetime
+from io import BytesIO
+import os
+import sqlite3
+import pandas as pd
+import streamlit as st
+
+# Configuração da Página
+st.set_page_config(
+    page_title="SDS Imóveis - Gestão e Dashboard",
+    page_icon="🏢",
+    layout="wide",
+    initial_sidebar_state="auto",
+)
+
+# ---------------------------------------------------------
+# APLICANDO A IDENTIDADE VISUAL E RESPONSIVIDADE (CSS)
+# ---------------------------------------------------------
+st.markdown(
+    """
+    <style>
+    :root {
+        --azul-marinho: #1B263B;
+        --dourado: #C5A059;
+        --cinza-claro: #F8FAFC;
+        --branco: #FFFFFF;
+        --texto-escuro: #333333;
+    }
+
+    .stApp {
+        background-color: var(--cinza-claro);
+        color: var(--texto-escuro);
+    }
+
+    [data-testid="stSidebar"] {
+        background-color: var(--azul-marinho);
+        color: var(--branco);
+    }
+    [data-testid="stSidebar"] h1, [data-testid="stSidebar"] h2, [data-testid="stSidebar"] h3, [data-testid="stSidebar"] label {
+        color: var(--branco) !important;
+    }
+
+    h1, h2, h3 {
+        color: var(--azul-marinho);
+        font-family: 'Helvetica Neue', sans-serif;
+    }
+
+    div[data-testid="stMetric"] {
+        background-color: var(--branco);
+        padding: 15px;
+        border-radius: 8px;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+        border-left: 5px solid var(--dourado);
+        margin-bottom: 10px;
+    }
+    div[data-testid="stMetric"] label {
+        color: #666666 !important;
+    }
+    div[data-testid="stMetric"] div[data-testid="stMetricValue"] {
+        color: var(--azul-marinho) !important;
+    }
+
+    .stButton>button {
+        background-color: var(--dourado);
+        color: white;
+        border-radius: 5px;
+        border: none;
+        font-weight: bold;
+        width: 100%;
+        padding: 10px;
+    }
+    .stButton>button:hover {
+        background-color: #b08d4c;
+        color: white;
+    }
+
+    /* Ajustes para Telas Menores (Celular) */
+    @media (max-width: 768px) {
+        .stApp {
+            padding: 5px;
+        }
+        h1 {
+            font-size: 22px !important;
+        }
+        h2 {
+            font-size: 18px !important;
+        }
+        div[data-testid="stMetric"] {
+            padding: 10px;
+        }
+    }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
+
+# ---------------------------------------------------------
+# CONFIGURAÇÃO DO BANCO DE DADOS (SQLite)
+# ---------------------------------------------------------
+def init_db():
+  conn = sqlite3.connect("sds_imoveis.db")
+  cursor = conn.cursor()
+
+  cursor.execute("""
+        CREATE TABLE IF NOT EXISTS demandas (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            adquirente TEXT NOT NULL,
+            numero_imovel TEXT NOT NULL,
+            responsavel TEXT NOT NULL,
+            status TEXT NOT NULL,
+            prazo DATE NOT NULL,
+            valor REAL DEFAULT 0.0,
+            taxa_desc REAL DEFAULT 0.0,
+            pagamento TEXT DEFAULT 'Pendente',
+            tipo_imovel TEXT DEFAULT 'Caixa',
+            parceria TEXT DEFAULT 'Não',
+            parceiro_nome TEXT DEFAULT '',
+            pct_sds REAL DEFAULT 100.0
+        )
+    """)
+
+  cursor.execute("PRAGMA table_info(demandas)")
+  colunas = [coluna[1] for coluna in cursor.fetchall()]
+  if "adquirente" not in colunas:
+    cursor.execute(
+        "ALTER TABLE demandas ADD COLUMN adquirente TEXT DEFAULT ''"
+    )
+  if "numero_imovel" not in colunas:
+    cursor.execute(
+        "ALTER TABLE demandas ADD COLUMN numero_imovel TEXT DEFAULT ''"
+    )
+  if "taxa_desc" not in colunas:
+    cursor.execute(
+        "ALTER TABLE demandas ADD COLUMN taxa_desc REAL DEFAULT 0.0"
+    )
+  if "tipo_imovel" not in colunas:
+    cursor.execute(
+        "ALTER TABLE demandas ADD COLUMN tipo_imovel TEXT DEFAULT 'Caixa'"
+    )
+  if "parceria" not in colunas:
+    cursor.execute(
+        "ALTER TABLE demandas ADD COLUMN parceria TEXT DEFAULT 'Não'"
+    )
+  if "parceiro_nome" not in colunas:
+    cursor.execute(
+        "ALTER TABLE demandas ADD COLUMN parceiro_nome TEXT DEFAULT ''"
+    )
+  if "pct_sds" not in colunas:
+    cursor.execute(
+        "ALTER TABLE demandas ADD COLUMN pct_sds REAL DEFAULT 100.0"
+    )
+
+  cursor.execute("""
+        CREATE TABLE IF NOT EXISTS utilizadores (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            usuario TEXT UNIQUE NOT NULL,
+            senha TEXT NOT NULL,
+            cargo TEXT NOT NULL
+        )
+    """)
+
+  cursor.execute("SELECT COUNT(*) FROM utilizadores")
+  if cursor.fetchone()[0] == 0:
+    cursor.execute(
+        """
+            INSERT INTO utilizadores (usuario, senha, cargo) 
+            VALUES (?, ?, ?)
+        """,
+        ("admin", "admin123", "CEO / Administração"),
+    )
+
+  conn.commit()
+  conn.close()
+
+
+init_db()
+
+
+def carregar_dados():
+  conn = sqlite3.connect("sds_imoveis.db")
+  df = pd.read_sql("SELECT * FROM demandas", conn)
+  conn.close()
+  if not df.empty:
+    df["prazo"] = pd.to_datetime(df["prazo"])
+    df["Ano"] = df["prazo"].dt.year
+    df["Mês"] = df["prazo"].dt.month
+    df["adquirente"] = df["adquirente"].fillna("")
+    df["numero_imovel"] = df["numero_imovel"].fillna("")
+    df["taxa_desc"] = df["taxa_desc"].fillna(0.0)
+    df["tipo_imovel"] = df["tipo_imovel"].fillna("Caixa")
+    df["parceria"] = df["parceria"].fillna("Não")
+    df["parceiro_nome"] = df["parceiro_nome"].fillna("")
+    df["pct_sds"] = df["pct_sds"].fillna(100.0)
+
+    df["valor_liquido"] = df["valor"] * (1 - df["taxa_desc"] / 100.0)
+    df["lucro_SDS"] = df["valor_liquido"] * (df["pct_sds"] / 100.0)
+    df["Lucro_Parceiro (R$)"] = df["valor_liquido"] - df["lucro_SDS"]
+  return df
+
+
+# ---------------------------------------------------------
+# SISTEMA DE LOGIN E SESSÃO
+# ---------------------------------------------------------
+if "autenticado" not in st.session_state:
+  st.session_state["autenticado"] = False
+  st.session_state["usuario"] = ""
+  st.session_state["cargo"] = ""
+
+if not st.session_state["autenticado"]:
+  st.markdown(
+      "<h1 style='text-align: center; color: #1B263B;'>🏢 SDS Imóveis -"
+      " Acesso Restrito</h1>",
+      unsafe_allow_html=True,
+  )
+
+  aba_login, aba_registo, aba_esqueci = st.tabs([
+      "Entrar",
+      "Registrar Novo Colaborador",
+      "Esqueci a Senha",
+  ])
+
+  with aba_login:
+    st.subheader("Iniciar Sessão")
+    with st.form("form_login"):
+      user_input = st.text_input("Utilizador")
+      senha_input = st.text_input("Senha", type="password")
+      btn_login = st.form_submit_button("Entrar")
+
+      if btn_login:
+        conn = sqlite3.connect("sds_imoveis.db")
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT cargo FROM utilizadores WHERE usuario = ? AND senha = ?",
+            (user_input, senha_input),
+        )
+        resultado = cursor.fetchone()
+        conn.close()
+
+        if resultado:
+          st.session_state["autenticado"] = True
+          st.session_state["usuario"] = user_input
+          st.session_state["cargo"] = resultado[0]
+          st.success("Login efetuado com sucesso!")
+          st.rerun()
+        else:
+          st.error("Utilizador ou senha incorretos.")
+
+  with aba_registo:
+    st.subheader("Registrar Novo Colaborador")
+    with st.form("form_registo"):
+      novo_user = st.text_input("Escolha um Nome de Utilizador")
+      nova_senha = st.text_input("Escolha uma Senha", type="password")
+      novo_cargo = st.selectbox(
+          "Cargo", ["CEO / Administração", "Corretor", "Funcionário"]
+      )
+      btn_reg = st.form_submit_button("Registrar")
+
+      if btn_reg:
+        if novo_user and nova_senha:
+          try:
+            conn = sqlite3.connect("sds_imoveis.db")
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                            INSERT INTO utilizadores (usuario, senha, cargo) 
+                            VALUES (?, ?, ?)
+                        """,
+                (novo_user, nova_senha, novo_cargo),
+            )
+            conn.commit()
+            conn.close()
+            st.success("Registro efetuado com sucesso!")
+          except sqlite3.IntegrityError:
+            st.error("Este nome de utilizador já existe.")
+        else:
+          st.error("Preencha todos os campos.")
+
+  with aba_esqueci:
+    st.subheader("Redefinir / Esqueci a Senha")
+    with st.form("form_esqueci_senha"):
+      user_rec = st.text_input("Informe seu Nome de Utilizador")
+      nova_senha_rec = st.text_input("Digite a Nova Senha", type="password")
+      confirma_senha_rec = st.text_input(
+          "Confirme a Nova Senha", type="password"
+      )
+      btn_rec = st.form_submit_button("Redefinir Senha")
+
+      if btn_rec:
+        if user_rec and nova_senha_rec and confirma_senha_rec:
+          if nova_senha_rec == confirma_senha_rec:
+            conn = sqlite3.connect("sds_imoveis.db")
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT * FROM utilizadores WHERE usuario = ?", (user_rec,)
+            )
+            if cursor.fetchone():
+              cursor.execute(
+                  "UPDATE utilizadores SET senha = ? WHERE usuario = ?",
+                  (nova_senha_rec, user_rec),
+              )
+              conn.commit()
+              conn.close()
+              st.success("Senha redefinida com sucesso!")
+            else:
+              conn.close()
+              st.error("Usuário não encontrado.")
+          else:
+            st.error("As senhas não coincidem.")
+        else:
+          st.error("Preencha todos os campos.")
+
+  st.stop()
+
+# ---------------------------------------------------------
+# APLICAÇÃO PRINCIPAL (APÓS LOGIN)
+# ---------------------------------------------------------
+logo_encontrada = False
+for nome_logo in ["logo_sds.png", "logo_sds.png.jpeg", "logo_sds.jpeg"]:
+  if os.path.exists(nome_logo):
+    st.sidebar.image(nome_logo, use_container_width=True)
+    logo_encontrada = True
+    break
+
+if not logo_encontrada:
+  st.sidebar.markdown(
+      "<h2 style='text-align: center; color: #C5A059;'>🏢 SDS Imóveis</h2>",
+      unsafe_allow_html=True,
+  )
+
+st.sidebar.markdown(f"**Utilizador:** {st.session_state['usuario']}")
+st.sidebar.markdown(f"**Cargo:** {st.session_state['cargo']}")
+st.sidebar.markdown("---")
+
+if st.session_state["cargo"] == "CEO / Administração":
+  opcoes_menu = [
+      "Dashboard",
+      "Gestão de Demanda",
+      "Faturamento",
+      "Relatórios",
+      "👥 Gerenciar Usuários",
+      "🧮 Calculadora",
+  ]
+else:
+  opcoes_menu = [
+      "Dashboard",
+      "Gestão de Demanda",
+      "👥 Gerenciar Usuários",
+      "🧮 Calculadora",
+  ]
+
+menu = st.sidebar.selectbox("Navegação", opcoes_menu)
+
+# ---------------------------------------------------------
+# CALCULADORA RÁPIDA NA BARRA LATERAL (EXPANSÍVEL)
+# ---------------------------------------------------------
+st.sidebar.markdown("---")
+with st.sidebar.expander("🧮 Calculadora Rápida", expanded=False):
+  calc_v1 = st.number_input("Valor (R$)", min_value=0.0, step=100.0, key="c_v1")
+  calc_p = st.number_input(
+      "Porcentagem (%)", min_value=0.0, max_value=100.0, step=1.0, key="c_p"
+  )
+  operacao = st.radio(
+      "Operação", ["Calcular %", "Descontar %", "Somar %"], key="c_op"
+  )
+
+  if operacao == "Calcular %":
+    res_c = calc_v1 * (calc_p / 100.0)
+    st.info(f"**Resultado:** R$ {res_c:,.2f}")
+  elif operacao == "Descontar %":
+    res_c = calc_v1 * (1 - calc_p / 100.0)
+    st.info(f"**Resultado Líquido:** R$ {res_c:,.2f}")
+  else:
+    res_c = calc_v1 * (1 + calc_p / 100.0)
+    st.info(f"**Resultado com Adicional:** R$ {res_c:,.2f}")
+
+st.sidebar.markdown("---")
+if st.sidebar.button("Terminar Sessão (Logout)"):
+  st.session_state["autenticado"] = False
+  st.rerun()
+
+meses_nomes = {
+    1: "Janeiro",
+    2: "Fevereiro",
+    3: "Março",
+    4: "Abril",
+    5: "Maio",
+    6: "Junho",
+    7: "Julho",
+    8: "Agosto",
+    9: "Setembro",
+    10: "Outubro",
+    11: "Novembro",
+    12: "Dezembro",
+}
+
+# ---------------------------------------------------------
+# 1. DASHBOARD
+# ---------------------------------------------------------
+if menu == "Dashboard":
+  st.title("📊 Painel de Controle - SDS Imóveis")
+  st.write(
+      "Visão geral das demandas, indicadores e desempenho da imobiliária."
+  )
+
+  df = carregar_dados()
+
+  if not df.empty:
+    total_demandas = len(df)
+    pendentes = len(df[df["status"] == "Pendente"])
+    concluidas = len(df[df["status"] == "Concluída"])
+    atrasadas = len(df[df["status"] == "Atrasada"])
+
+    col1, col2, col3, col4 = st.columns([1, 1, 1, 1])
+    col1.metric("Total de Demandas", total_demandas)
+    col2.metric("Pendentes", pendentes)
+    col3.metric("Concluídas", concluidas)
+    col4.metric("Atrasadas", atrasadas)
+
+    st.markdown("---")
+
+    anos_disponiveis = sorted(df["Ano"].dropna().unique(), reverse=True)
+    ano_grafico = st.selectbox(
+        "Selecione o Ano para o Gráfico de Desempenho", anos_disponiveis
+    )
+
+    df_ano_dash = df[df["Ano"] == ano_grafico]
+
+    dados_grafico = []
+    for m in range(1, 13):
+      df_mes = df_ano_dash[df_ano_dash["Mês"] == m]
+      recebido_mes = df_mes[df_mes["pagamento"] == "Recebido"][
+          "lucro_SDS"
+      ].sum()
+      pendente_mes = df_mes[df_mes["pagamento"] == "Pendente"][
+          "lucro_SDS"
+      ].sum()
+      dados_grafico.append({
+          "Mês": meses_nomes[m],
+          "Recebido SDS (R$)": recebido_mes,
+          "Pendente SDS (R$)": pendente_mes,
+      })
+
+    df_chart = pd.DataFrame(dados_grafico)
+    df_chart.set_index("Mês", inplace=True)
+
+    st.subheader(f"📈 Desempenho Financeiro SDS ({ano_grafico})")
+    st.bar_chart(df_chart)
+
+    st.markdown("---")
+    st.subheader("Demandas Recentes")
+    st.dataframe(df.tail(5), use_container_width=True)
+  else:
+    st.info("Nenhuma demanda cadastrada no banco de dados ainda.")
+
+# ---------------------------------------------------------
+# 2. GESTÃO DE DEMANDAS
+# ---------------------------------------------------------
+elif menu == "Gestão de Demanda":
+  st.title("🛠️ Gestão de Demandas")
+
+  with st.form("form_demanda", clear_on_submit=True):
+    st.subheader("Cadastrar Nova Demanda (ou Demanda Retroativa)")
+    col1, col2 = st.columns(2)
+    with col1:
+      adquirente = st.text_input("Nome do Adquirente")
+      numero_imovel = st.text_input("Número do Imóvel / CHB")
+      responsavel = st.text_input("Responsável SDS")
+    with col2:
+      tipo_imovel = st.selectbox(
+          "Tipo de Imóvel", ["Caixa", "Tenda", "Novo", "Usado", "Outros"], index=0
+      )
+      status = st.selectbox(
+          "Status", ["Pendente", "Em Andamento", "Concluída", "Atrasada"]
+      )
+      prazo = st.date_input("Data / Prazo de Entrega", datetime.date.today())
+
+    st.markdown("**💰 Valores e Taxas / Tratamento Contábil**")
+    col_v1, col_v2 = st.columns(2)
+    with col_v1:
+      valor = st.number_input(
+          "Valor Bruto / Comissão Total (R$)", min_value=0.0, format="%.2f"
+      )
+    with col_v2:
+      taxa_desc = st.number_input(
+          "Taxa / Desconto (%) (Ex: 14.45)",
+          min_value=0.0,
+          max_value=100.0,
+          value=0.0,
+          step=0.05,
+      )
+
+    st.markdown("**🤝 Informações de Parceria e Divisão de Lucro**")
+    col_p1, col_p2, col_p3 = st.columns(3)
+    with col_p1:
+      parceria = st.selectbox("Possui Parceria?", ["Não", "Sim"])
+    with col_p2:
+      parceiro_nome = st.text_input(
+          "Nome do Parceiro / Imobiliária",
+          disabled=(parceria == "Não"),
+          placeholder="Ex: Corretor X",
+      )
+    with col_p3:
+      pct_sds = st.number_input(
+          "% de Lucro da SDS Imóveis",
+          min_value=0.0,
+          max_value=100.0,
+          value=100.0 if parceria == "Não" else 50.0,
+          step=5.0,
+      )
+
+    pagamento = st.selectbox("Status do Pagamento", ["Pendente", "Recebido"])
+
+    submit = st.form_submit_button("Salvar Demanda")
+
+    if submit:
+      if adquirente and numero_imovel and responsavel:
+        conn = sqlite3.connect("sds_imoveis.db")
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+                    INSERT INTO demandas (adquirente, numero_imovel, responsavel, status, prazo, valor, taxa_desc, pagamento, tipo_imovel, parceria, parceiro_nome, pct_sds)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+            (
+                adquirente,
+                numero_imovel,
+                responsavel,
+                status,
+                str(prazo),
+                valor,
+                taxa_desc,
+                pagamento,
+                tipo_imovel,
+                parceria,
+                parceiro_nome if parceria == "Sim" else "",
+                pct_sds,
+            ),
+        )
+        conn.commit()
+        conn.close()
+        st.success("Demanda cadastrada com sucesso!")
+        st.rerun()
+      else:
+        st.error(
+            "Preencha os campos obrigatórios (Adquirente, Número do Imóvel e"
+            " Responsável)."
+        )
+
+  st.markdown("---")
+
+  st.subheader("Demandas Cadastradas")
+  df = carregar_dados()
+
+  if not df.empty:
+    st.markdown("🔍 **Pesquisador Rápido de Demandas**")
+    termo_busca = st.text_input(
+        "Buscar por Adquirente ou Número do Imóvel / CHB",
+        placeholder="Digite o nome do adquirente ou o número do imóvel...",
+    )
+
+    col_f1, col_f2 = st.columns(2)
+    with col_f1:
+      filtro_tipo = st.selectbox(
+          "Filtrar por Categoria",
+          ["Todos", "Caixa", "Tenda", "Novo", "Usado", "Outros"],
+      )
+    with col_f2:
+      filtro_parc = st.selectbox(
+          "Filtrar por Parceria", ["Todos", "Sim", "Não"]
+      )
+
+    df_exibir = df.copy()
+
+    if termo_busca.strip():
+      df_exibir = df_exibir[
+          df_exibir["adquirente"]
+          .str.contains(termo_busca, case=False, na=False)
+          | df_exibir["numero_imovel"]
+          .str.contains(termo_busca, case=False, na=False)
+      ]
+
+    if filtro_tipo != "Todos":
+      df_exibir = df_exibir[df_exibir["tipo_imovel"] == filtro_tipo]
+    if filtro_parc != "Todos":
+      df_exibir = df_exibir[df_exibir["parceria"] == filtro_parc]
+
+    cols_view = [
+        "id",
+        "adquirente",
+        "numero_imovel",
+        "responsavel",
+        "tipo_imovel",
+        "parceiro_nome",
+        "status",
+        "valor",
+        "taxa_desc",
+        "valor_liquido",
+        "lucro_SDS",
+        "pagamento",
+    ]
+    st.dataframe(df_exibir[cols_view], use_container_width=True)
+
+    st.markdown("---")
+    st.subheader("📝 Editar ou Excluir Demanda")
+
+    id_selecionado = st.selectbox(
+        "Selecione o ID da Demanda para Editar ou Excluir", df["id"].tolist()
+    )
+
+    demanda_sel = df[df["id"] == id_selecionado].iloc[0]
+
+    with st.expander(
+        f"Clique para Editar os Dados da Demanda ID {id_selecionado}",
+        expanded=True,
+    ):
+      with st.form("form_editar_demanda"):
+        col_e1, col_e2 = st.columns(2)
+        with col_e1:
+          edit_adquirente = st.text_input(
+              "Adquirente", value=str(demanda_sel["adquirente"])
+          )
+          edit_numero_imovel = st.text_input(
+              "Número do Imóvel", value=str(demanda_sel["numero_imovel"])
+          )
+          edit_responsavel = st.text_input(
+              "Responsável SDS", value=str(demanda_sel["responsavel"])
+          )
+
+        with col_e2:
+          tipos_list = ["Caixa", "Tenda", "Novo", "Usado", "Outros"]
+          edit_tipo_imovel = st.selectbox(
+              "Tipo de Imóvel",
+              tipos_list,
+              index=tipos_list.index(demanda_sel["tipo_imovel"])
+              if demanda_sel["tipo_imovel"] in tipos_list
+              else 0,
+          )
+
+          status_list = ["Pendente", "Em Andamento", "Concluída", "Atrasada"]
+          edit_status = st.selectbox(
+              "Status",
+              status_list,
+              index=status_list.index(demanda_sel["status"])
+              if demanda_sel["status"] in status_list
+              else 0,
+          )
+
+          dt_prazo = (
+              demanda_sel["prazo"].date()
+              if hasattr(demanda_sel["prazo"], "date")
+              else datetime.date.today()
+          )
+          edit_prazo = st.date_input("Prazo de Entrega", dt_prazo)
+
+        st.markdown("**Valores e Taxas / Contabilidade**")
+        col_ev1, col_ev2 = st.columns(2)
+        with col_ev1:
+          edit_valor = st.number_input(
+              "Valor Bruto (R$)",
+              min_value=0.0,
+              value=float(demanda_sel["valor"]),
+              format="%.2f",
+          )
+        with col_ev2:
+          edit_taxa_desc = st.number_input(
+              "Taxa / Desconto (%)",
+              min_value=0.0,
+              max_value=100.0,
+              value=float(demanda_sel["taxa_desc"]),
+              step=0.05,
+          )
+
+        st.markdown("**Parceria e Divisão de Lucro**")
+        col_ep1, col_ep2, col_ep3 = st.columns(3)
+        with col_ep1:
+          edit_parceria = st.selectbox(
+              "Possui Parceria?",
+              ["Não", "Sim"],
+              index=0 if demanda_sel["parceria"] == "Não" else 1,
+          )
+        with col_ep2:
+          edit_parceiro_nome = st.text_input(
+              "Nome do Parceiro", value=str(demanda_sel["parceiro_nome"])
+          )
+        with col_ep3:
+          edit_pct_sds = st.number_input(
+              "% Lucro SDS",
+              min_value=0.0,
+              max_value=100.0,
+              value=float(demanda_sel["pct_sds"]),
+              step=5.0,
+          )
+
+        edit_pagamento = st.selectbox(
+            "Status do Pagamento",
+            ["Pendente", "Recebido"],
+            index=0 if demanda_sel["pagamento"] == "Pendente" else 1,
+        )
+
+        btn_salvar_edicao = st.form_submit_button("💾 Salvar Alterações")
+
+        if btn_salvar_edicao:
+          conn = sqlite3.connect("sds_imoveis.db")
+          cursor = conn.cursor()
+          cursor.execute(
+              """
+                    UPDATE demandas
+                    SET adquirente = ?, numero_imovel = ?, responsavel = ?, tipo_imovel = ?,
+                        status = ?, prazo = ?, parceria = ?, parceiro_nome = ?, pct_sds = ?,
+                        valor = ?, taxa_desc = ?, pagamento = ?
+                    WHERE id = ?
+                """,
+              (
+                  edit_adquirente,
+                  edit_numero_imovel,
+                  edit_responsavel,
+                  edit_tipo_imovel,
+                  edit_status,
+                  str(edit_prazo),
+                  edit_parceria,
+                  edit_parceiro_nome,
+                  edit_pct_sds,
+                  edit_valor,
+                  edit_taxa_desc,
+                  edit_pagamento,
+                  id_selecionado,
+              ),
+          )
+          conn.commit()
+          conn.close()
+          st.success(f"Demanda ID {id_selecionado} atualizada com sucesso!")
+          st.rerun()
+
+    st.markdown("<br>", unsafe_allow_html=True)
+    if st.button("🗑️ Excluir Esta Demanda"):
+      conn = sqlite3.connect("sds_imoveis.db")
+      cursor = conn.cursor()
+      cursor.execute("DELETE FROM demandas WHERE id = ?", (id_selecionado,))
+      conn.commit()
+      conn.close()
+      st.success(f"Demanda ID {id_selecionado} excluída com sucesso!")
+      st.rerun()
+
+  else:
+    st.info("Nenhum registo encontrado.")
+
+# ---------------------------------------------------------
+# 3. FATURAMENTO (APENAS PARA CEO / ADMINISTRAÇÃO)
+# ---------------------------------------------------------
+elif menu == "Faturamento":
+  st.title("💰 Controle de Faturamento (Mensal e Anual)")
+
+  df = carregar_dados()
+
+  if not df.empty:
+    anos_disponiveis = sorted(df["Ano"].dropna().unique(), reverse=True)
+    ano_selecionado = st.selectbox("Filtrar por Ano", anos_disponiveis)
+
+    df_ano = df[df["Ano"] == ano_selecionado]
+
+    total_recebido_sds = df_ano[df_ano["pagamento"] == "Recebido"][
+        "lucro_SDS"
+    ].sum()
+    total_pendente_sds = df_ano[df_ano["pagamento"] == "Pendente"][
+        "lucro_SDS"
+    ].sum()
+    total_parceiros = df_ano[df_ano["pagamento"] == "Recebido"][
+        "Lucro_Parceiro (R$)"
+    ].sum()
+
+    st.subheader(f"📅 Resumo do Ano: {ano_selecionado} (Líquido SDS)")
+    col1, col2, col3 = st.columns([1, 1, 1])
+    col1.metric("Recebido SDS", f"R$ {total_recebido_sds:,.2f}")
+    col2.metric("Pendente SDS", f"R$ {total_pendente_sds:,.2f}")
+    col3.metric("Repassado a Parceiros", f"R$ {total_parceiros:,.2f}")
+
+    st.markdown("---")
+    st.subheader("📊 Faturamento SDS por Mês")
+
+    resumo_mensal = []
+    for m in range(1, 13):
+      df_mes = df_ano[df_ano["Mês"] == m]
+      rec_mes = df_mes[df_mes["pagamento"] == "Recebido"]["lucro_SDS"].sum()
+      pend_mes = df_mes[df_mes["pagamento"] == "Pendente"]["lucro_SDS"].sum()
+      total_mes = rec_mes + pend_mes
+
+      if not df_mes.empty or rec_mes > 0 or pend_mes > 0:
+        resumo_mensal.append({
+            "Mês": meses_nomes[m],
+            "Recebido SDS (R$)": rec_mes,
+            "Pendente SDS (R$)": pend_mes,
+            "Total SDS Mês (R$)": total_mes,
+        })
+
+    if resumo_mensal:
+      df_resumo_mensal = pd.DataFrame(resumo_mensal)
+      st.dataframe(df_resumo_mensal, use_container_width=True)
+    else:
+      st.info(f"Sem movimentações registadas para o ano {ano_selecionado}.")
+
+    st.markdown("---")
+    st.subheader(f"Detalhamento de Lançamentos ({ano_selecionado})")
+    cols_fat = [
+        "id",
+        "adquirente",
+        "numero_imovel",
+        "responsavel",
+        "tipo_imovel",
+        "parceiro_nome",
+        "valor",
+        "taxa_desc",
+        "valor_liquido",
+        "pct_sds",
+        "lucro_SDS",
+        "pagamento",
+    ]
+    st.dataframe(df_ano[cols_fat], use_container_width=True)
+  else:
+    st.info("Sem dados financeiros disponíveis.")
+
+# ---------------------------------------------------------
+# 4. RELATÓRIOS (APENAS PARA CEO / ADMINISTRAÇÃO)
+# ---------------------------------------------------------
+elif menu == "Relatórios":
+  st.title("📈 Relatórios e Exportação Avançada")
+  st.write(
+      "Visualize o resumo analítico e descarregue os relatórios completos da"
+      " imobiliária."
+  )
+
+  df = carregar_dados()
+
+  if not df.empty:
+    total_geral_sds = df["lucro_SDS"].sum()
+    total_geral_recebido = df[df["pagamento"] == "Recebido"][
+        "lucro_SDS"
+    ].sum()
+    total_geral_pendente = df[df["pagamento"] == "Pendente"][
+        "lucro_SDS"
+    ].sum()
+
+    col1, col2, col3 = st.columns([1, 1, 1])
+    col1.metric("Lucro SDS Total Registado", f"R$ {total_geral_sds:,.2f}")
+    col2.metric("Lucro SDS Recebido", f"R$ {total_geral_recebido:,.2f}")
+    col3.metric("Lucro SDS Pendente", f"R$ {total_geral_pendente:,.2f}")
+
+    st.markdown("---")
+
+    st.subheader("🔍 Filtrar Dados para Relatório")
+    col_f1, col_f2, col_f3, col_f4 = st.columns(4)
+
+    with col_f1:
+      status_filtro = st.selectbox(
+          "Status Demanda",
+          ["Todos", "Pendente", "Em Andamento", "Concluída", "Atrasada"],
+      )
+    with col_f2:
+      pag_filtro = st.selectbox(
+          "Status Pagamento", ["Todos", "Recebido", "Pendente"]
+      )
+    with col_f3:
+      tipo_filtro = st.selectbox(
+          "Tipo de Imóvel",
+          ["Todos", "Caixa", "Tenda", "Novo", "Usado", "Outros"],
+      )
+    with col_f4:
+      parc_filtro = st.selectbox("Apenas Parcerias?", ["Todos", "Sim", "Não"])
+
+    df_filtrado = df.copy()
+    if status_filtro != "Todos":
+      df_filtrado = df_filtrado[df_filtrado["status"] == status_filtro]
+    if pag_filtro != "Todos":
+      df_filtrado = df_filtrado[df_filtrado["pagamento"] == pag_filtro]
+    if tipo_filtro != "Todos":
+      df_filtrado = df_filtrado[df_filtrado["tipo_imovel"] == tipo_filtro]
+    if parc_filtro != "Todos":
+      df_filtrado = df_filtrado[df_filtrado["parceria"] == parc_filtro]
+
+    st.subheader("📋 Pré-visualização do Relatório Filtrado")
+    cols_rel = [
+        "id",
+        "adquirente",
+        "numero_imovel",
+        "responsavel",
+        "tipo_imovel",
+        "parceiro_nome",
+        "valor",
+        "taxa_desc",
+        "valor_liquido",
+        "pct_sds",
+        "lucro_SDS",
+        "Lucro_Parceiro (R$)",
+        "status",
+        "pagamento",
+    ]
+    st.dataframe(df_filtrado[cols_rel], use_container_width=True)
+
+    st.markdown("---")
+
+    output = BytesIO()
+    with pd.ExcelWriter(output, engine="openpyxl") as writer:
+      df_filtrado.to_excel(
+          writer, index=False, sheet_name="Relatorio_SDS_Imoveis"
+      )
+    excel_data = output.getvalue()
+
+    st.download_button(
+        label="📥 Baixar Relatório Filtrado em Excel",
+        data=excel_data,
+        file_name="relatorio_detalhado_sds.xlsx",
+        mime=(
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        ),
+    )
+  else:
+    st.info("Não há dados disponíveis para gerar relatórios.")
+
+# ---------------------------------------------------------
+# 5. GERENCIAR USUÁRIOS
+# ---------------------------------------------------------
+elif menu == "👥 Gerenciar Usuários":
+  st.title("👥 Gerenciamento de Usuários e Acessos")
+  st.write("Altere dados, senhas e permissões dos colaboradores da imobiliária.")
+
+  conn = sqlite3.connect("sds_imoveis.db")
+  df_users = pd.read_sql("SELECT id, usuario, cargo FROM utilizadores", conn)
+  conn.close()
+
+  st.subheader("📋 Lista de Usuários Cadastrados")
+  st.dataframe(df_users, use_container_width=True)
+
+  st.markdown("---")
+  st.subheader("⚙️ Alterar Dados ou Senha de um Usuário")
+
+  col_u1, col_u2 = st.columns(2)
+  with col_u1:
+    user_sel = st.selectbox(
+        "Selecione o Usuário para Alterar", df_users["usuario"].tolist()
+    )
+
+  user_info = df_users[df_users["usuario"] == user_sel].iloc[0]
+
+  with col_u2:
+    novo_cargo_user = st.selectbox(
+        "Cargo do Usuário",
+        ["CEO / Administração", "Corretor", "Funcionário"],
+        index=["CEO / Administração", "Corretor", "Funcionário"].index(
+            user_info["cargo"]
+        ),
+    )
+
+  nova_senha_user = st.text_input(
+      "Nova Senha (deixe em branco se não quiser alterar)", type="password"
+  )
+
+  col_b1, col_b2 = st.columns(2)
+  with col_b1:
+    if st.button("Salvar Alterações"):
+      conn = sqlite3.connect("sds_imoveis.db")
+      cursor = conn.cursor()
+      if nova_senha_user.strip():
+        cursor.execute(
+            "UPDATE utilizadores SET cargo = ?, senha = ? WHERE usuario = ?",
+            (novo_cargo_user, nova_senha_user, user_sel),
+        )
+      else:
+        cursor.execute(
+            "UPDATE utilizadores SET cargo = ? WHERE usuario = ?",
+            (novo_cargo_user, user_sel),
+        )
+      conn.commit()
+      conn.close()
+      st.success(f"Dados do usuário '{user_sel}' atualizados com sucesso!")
+      st.rerun()
+
+  with col_b2:
+    if st.button("⚠️ Excluir Usuário"):
+      if user_sel == st.session_state["usuario"]:
+        st.error("Você não pode excluir o seu próprio usuário logado.")
+      else:
+        conn = sqlite3.connect("sds_imoveis.db")
+        cursor = conn.cursor()
+        cursor.execute(
+            "DELETE FROM utilizadores WHERE usuario = ?", (user_sel,)
+        )
+        conn.commit()
+        conn.close()
+        st.success(f"Usuário '{user_sel}' removido com sucesso!")
+        st.rerun()
+
+# ---------------------------------------------------------
+# 6. CALCULADORA COMPLETA DEDICADA
+# ---------------------------------------------------------
+elif menu == "🧮 Calculadora":
+  st.title("🧮 Calculadora Financeira e Contábil SDS")
+  st.write("Realize cálculos rápidos de comissão, impostos e divisão de valores.")
+
+  col_ca1, col_ca2 = st.columns(2)
+
+  with col_ca1:
+    st.subheader("1. Cálculo de Desconto / Taxa Imposto")
+    v_bruto = st.number_input("Valor Bruto (R$)", min_value=0.0, value=1500.0)
+    tx_pct = st.number_input(
+        "Taxa (%)", min_value=0.0, max_value=100.0, value=14.45
+    )
+
+    v_desconto = v_bruto * (tx_pct / 100.0)
+    v_liq = v_bruto - v_desconto
+
+    st.write(f"**Valor do Desconto:** R$ {v_desconto:,.2f}")
+    st.success(f"**Valor Líquido:** R$ {v_liq:,.2f}")
+
+  with col_ca2:
+    st.subheader("2. Divisão de Parceria")
+    pct_sds_calc = st.slider("% SDS Imóveis", 0.0, 100.0, 50.0, step=5.0)
+
+    val_sds = v_liq * (pct_sds_calc / 100.0)
+    val_parc = v_liq - val_sds
+
+    st.info(f"**Parte Líquida SDS:** R$ {val_sds:,.2f}")
+    st.warning(f"**Parte Líquida Parceiro:** R$ {val_parc:,.2f}")
