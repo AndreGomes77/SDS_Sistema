@@ -107,7 +107,14 @@ def init_db():
   conn = sqlite3.connect("sds_imoveis.db")
   cursor = conn.cursor()
 
-  # Criação robusta da tabela de demandas com todas as colunas padrão
+  # Se a tabela 'demandas' já existir na versão antiga, recria de forma limpa
+  cursor.execute("PRAGMA table_info(demandas)")
+  colunas = [coluna[1] for coluna in cursor.fetchall()]
+
+  if "status_parceiro" not in colunas and len(colunas) > 0:
+    cursor.execute("DROP TABLE demandas")
+
+  # Tabela de Demandas Completa
   cursor.execute("""
         CREATE TABLE IF NOT EXISTS demandas (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -126,33 +133,6 @@ def init_db():
             status_parceiro TEXT DEFAULT 'Pendente'
         )
     """)
-
-  # Garantir colunas caso a tabela já exista sem alguma delas
-  cursor.execute("PRAGMA table_info(demandas)")
-  colunas = [coluna[1] for coluna in cursor.fetchall()]
-
-  colunas_para_adicionar = {
-      "adquirente": "TEXT DEFAULT ''",
-      "numero_imovel": "TEXT DEFAULT ''",
-      "responsavel": "TEXT DEFAULT ''",
-      "status": "TEXT DEFAULT 'Pendente'",
-      "prazo": "DATE",
-      "valor": "REAL DEFAULT 0.0",
-      "taxa_desc": "REAL DEFAULT 0.0",
-      "pagamento": "TEXT DEFAULT 'Pendente'",
-      "tipo_imovel": "TEXT DEFAULT 'Caixa'",
-      "parceria": "TEXT DEFAULT 'Não'",
-      "parceiro_nome": "TEXT DEFAULT ''",
-      "pct_sds": "REAL DEFAULT 100.0",
-      "status_parceiro": "TEXT DEFAULT 'Pendente'",
-  }
-
-  for col, tipo in colunas_para_adicionar.items():
-    if col not in colunas:
-      try:
-        cursor.execute(f"ALTER TABLE demandas ADD COLUMN {col} {tipo}")
-      except sqlite3.OperationalError:
-        pass
 
   # Tabela de Utilizadores
   cursor.execute("""
