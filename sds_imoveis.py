@@ -119,7 +119,7 @@ def init_db():
   except Exception:
     pass
 
-  # Tabela de Demandas
+  # Tabela de Demandas Completa
   cursor.execute("""
         CREATE TABLE IF NOT EXISTS demandas (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -561,10 +561,14 @@ elif menu == "Gestão de Demanda":
     with col_p1:
       parceria = st.selectbox("Possui Parceria?", ["Não", "Sim"])
     with col_p2:
+      # CAMPO TOTALMENTE HABILITADO SEMPRE PARA PERMITIR MÚLTIPLOS PARCEIROS E EDITAR DESDE O INÍCIO
       parceiro_nome = st.text_input(
-          "Nome do Parceiro / Imobiliária",
-          disabled=(parceria == "Não"),
-          placeholder="Ex: Corretor X",
+          "Nome do(s) Parceiro(s) / Imobiliária(s)",
+          placeholder="Ex: Corretor X / Imobiliária Y",
+          help=(
+              "Você pode digitar mais de um parceiro separado por barra (/)"
+              " se houver."
+          ),
       )
     with col_p3:
       pct_sds = st.number_input(
@@ -604,7 +608,7 @@ elif menu == "Gestão de Demanda":
                 tipo_imovel,
                 tipo_servico,
                 parceria,
-                parceiro_nome if parceria == "Sim" else "",
+                parceiro_nome if parceria == "Sim" else (parceiro_nome or ""),
                 pct_sds,
             ),
         )
@@ -768,7 +772,9 @@ elif menu == "Gestão de Demanda":
           )
         with col_ep2:
           edit_parceiro_nome = st.text_input(
-              "Nome do Parceiro", value=str(demanda_sel["parceiro_nome"])
+              "Nome do(s) Parceiro(s)",
+              value=str(demanda_sel["parceiro_nome"]),
+              help="Adicione múltiplos parceiros separados por barra (/)",
           )
         with col_ep3:
           edit_pct_sds = st.number_input(
