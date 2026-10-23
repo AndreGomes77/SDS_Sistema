@@ -1,4 +1,4 @@
-import datetime
+imporimport datetime
 from io import BytesIO
 import os
 import sqlite3
@@ -122,9 +122,18 @@ def init_db():
             tipo_imovel TEXT DEFAULT 'Caixa',
             parceria TEXT DEFAULT 'Não',
             parceiro_nome TEXT DEFAULT '',
-            pct_sds REAL DEFAULT 100.0
+            pct_sds REAL DEFAULT 100.0,
+            status_parceiro TEXT DEFAULT 'Pendente'
         )
     """)
+
+  cursor.execute("PRAGMA table_info(demandas)")
+  colunas = [coluna[1] for coluna in cursor.fetchall()]
+  if "status_parceiro" not in colunas:
+    cursor.execute(
+        "ALTER TABLE demandas ADD COLUMN status_parceiro TEXT DEFAULT"
+        " 'Pendente'"
+    )
 
   # Tabela de Utilizadores
   cursor.execute("""
@@ -199,6 +208,9 @@ def carregar_dados():
     df["parceria"] = df["parceria"].fillna("Não")
     df["parceiro_nome"] = df["parceiro_nome"].fillna("")
     df["pct_sds"] = df["pct_sds"].fillna(100.0)
+    if "status_parceiro" not in df.columns:
+      df["status_parceiro"] = "Pendente"
+    df["status_parceiro"] = df["status_parceiro"].fillna("Pendente")
 
     df["valor_liquido"] = df["valor"] * (1 - df["taxa_desc"] / 100.0)
     df["lucro_SDS"] = df["valor_liquido"] * (df["pct_sds"] / 100.0)
@@ -379,6 +391,7 @@ if st.session_state["cargo"] == "CEO / Administração":
       "Dashboard",
       "Gestão de Demanda",
       "Faturamento",
+      "🤝 Controle de Repasse a Parceiros",
       "💸 Gestão de Gastos",
       "👔 Pagamentos de Funcionários",
       "Relatórios",
@@ -558,8 +571,8 @@ elif menu == "Gestão de Demanda":
         cursor = conn.cursor()
         cursor.execute(
             """
-                    INSERT INTO demandas (adquirente, numero_imovel, responsavel, status, prazo, valor, taxa_desc, pagamento, tipo_imovel, parceria, parceiro_nome, pct_sds)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    INSERT INTO demandas (adquirente, numero_imovel, responsavel, status, prazo, valor, taxa_desc, pagamento, tipo_imovel, parceria, parceiro_nome, pct_sds, status_parceiro)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Pendente')
                 """,
             (
                 adquirente,
@@ -869,7 +882,104 @@ elif menu == "Faturamento":
     st.info("Sem dados financeiros disponíveis.")
 
 # ---------------------------------------------------------
-# 4. GESTÃO DE GASTOS (EXCLUSIVO CEO / ADM)
+# 4. CONTROLE DE REPASSE A PARCEIROS (EXCLUSIVO CEO / ADM)
+# ---------------------------------------------------------
+elif menu == "🤝 Controle de Repasse a Parceiros":
+  st.title("🤝 Gestão de Comissões e Repasses a Parceiros")
+  st.write(
+      "Acompanhe o que precisa ser pago aos parceiros para manter as contas"
+      " em dia."
+  )
+
+  df = carregar_dados()
+
+  if not df.empty:
+    df_parcerias = df[df["parceria"] == "Sim"].copy()
+
+    if not df_parcerias.empty:
+      # Repasses pendentes (Comissão recebida pela SDS, mas ainda não paga ao parceiro)
+      df_pendentes_parc = df_parcerias[
+          (df_parcerias["pagamento"] == "Recebido")
+          & (df_parcerias["status_parceiro"] == "Pendente")
+      ]
+      total_devido_parceiros = df_pendentes_parc["Lucro_Parceiro (R$)"].sum()
+
+      # Repasses já concluídos
+      df_pagos_parc = df_parcerias[df_parcerias["status_parceiro"] == "Pago"]
+      total_ja_pago_parceiros = df_pagos_parc["Lucro_Parceiro (R$)"].sum()
+
+      col_pr1, col_pr2 = st.columns(2)
+      col_pr1.metric(
+          "🔴 Total Pendente A Pagar a Parceiros",
+          f"R$ {total_devido_parceiros:,.2f}",
+      )
+      col_pr2.metric(
+          "🟢 Total Já Repassado a Parceiros", f"R$ {total_ja_pago_parceiros:,.2f}"
+      )
+
+      st.markdown("---")
+
+      st.subheader("🚨 Repasses Pendentes (Ação Necessária)")
+      if not df_pendentes_parc.empty:
+        cols_p_view = [
+            "id",
+            "parceiro_nome",
+            "adquirente",
+            "numero_imovel",
+            "valor_liquido",
+            "Lucro_Parceiro (R$)",
+            "status_parceiro",
+        ]
+        st.dataframe(df_pendentes_parc[cols_p_view], use_container_width=True)
+
+        st.markdown("### 💳 Baixa de Repasse")
+        id_parc_dar_baixa = st.selectbox(
+            "Selecione o ID da Demanda para confirmar o repasse efetuado",
+            df_pendentes_parc["id"].tolist(),
+        )
+
+        if st.button("✅ Confirmar Repasse Efetuado ao Parceiro"):
+          conn = sqlite3.connect("sds_imoveis.db")
+          cursor = conn.cursor()
+          cursor.execute(
+              "UPDATE demandas SET status_parceiro = 'Pago' WHERE id = ?",
+              (id_parc_dar_baixa,),
+          )
+          conn.commit()
+          conn.close()
+          st.success(
+              f"Repasse referente à demanda ID {id_parc_dar_baixa} confirmado"
+              " com sucesso!"
+          )
+          st.rerun()
+      else:
+        st.success(
+            "🎉 Excelente! Não há nenhum repasse pendente a parceiros no"
+            " momento."
+        )
+
+      st.markdown("---")
+      st.subheader("📜 Histórico Geral de Parcerias")
+      cols_hist = [
+          "id",
+          "parceiro_nome",
+          "adquirente",
+          "numero_imovel",
+          "valor_liquido",
+          "lucro_SDS",
+          "Lucro_Parceiro (R$)",
+          "pagamento",
+          "status_parceiro",
+      ]
+      st.dataframe(df_parcerias[cols_hist], use_container_width=True)
+
+    else:
+      st.info("Nenhuma demanda cadastrada com parceria até o momento.")
+  else:
+    st.info("Sem demandas cadastradas no sistema.")
+
+# ---------------------------------------------------------
+# 5. GESTÃO DE GASTOS (EXCLUSIVO CEO / ADM)
 # ---------------------------------------------------------
 elif menu == "💸 Gestão de Gastos":
   st.title("💸 Controle de Gastos e Despesas da Empresa")
@@ -982,7 +1092,7 @@ elif menu == "💸 Gestão de Gastos":
     st.info("Nenhum gasto ou despesa cadastrado ainda.")
 
 # ---------------------------------------------------------
-# 5. PAGAMENTOS DE FUNCIONÁRIOS (NOVA ABA EXCLUSIVA CEO / ADM)
+# 6. PAGAMENTOS DE FUNCIONÁRIOS (EXCLUSIVO CEO / ADM)
 # ---------------------------------------------------------
 elif menu == "👔 Pagamentos de Funcionários":
   st.title("👔 Gestão de Pessoal e Benefícios (Folha Mensal)")
@@ -1003,7 +1113,6 @@ elif menu == "👔 Pagamentos de Funcionários":
       df_users["usuario"].tolist() if not df_users.empty else []
   )
 
-  # Permite adicionar nome manual se o funcionário ainda não tiver conta no sistema
   st.subheader("➕ Novo Lançamento de Pagamento")
   with st.form("form_folha_pagamento", clear_on_submit=True):
     col_p1, col_p2, col_p3 = st.columns(3)
@@ -1050,7 +1159,6 @@ elif menu == "👔 Pagamentos de Funcionários":
           "Status do Pagamento", ["Pendente", "Pago"]
       )
 
-    # Cálculo em Tempo Real
     total_pago_calc = salario_base + transporte + almoco + bonus - descontos
     st.info(f"💰 **Total Líquido A Pagar:** R$ {total_pago_calc:,.2f}")
 
@@ -1080,7 +1188,6 @@ elif menu == "👔 Pagamentos de Funcionários":
             ),
         )
 
-        # Se já foi pago, adiciona automaticamente na tabela de gastos para bater com o lucro líquido
         if status_pag_func == "Pago":
           desc_auto = (
               f"Folha/Benefícios - {nome_funcionario} ({meses_nomes[mes_ref]}/{ano_ref})"
@@ -1124,7 +1231,6 @@ elif menu == "👔 Pagamentos de Funcionários":
           df_p_filtrado["status_pagamento"] == status_folha_filtro
       ]
 
-    # Indicadores
     total_pendente_folha = df_p_filtrado[
         df_p_filtrado["status_pagamento"] == "Pendente"
     ]["total_calculado"].sum()
@@ -1173,7 +1279,6 @@ elif menu == "👔 Pagamentos de Funcionários":
         conn = sqlite3.connect("sds_imoveis.db")
         cursor = conn.cursor()
 
-        # Busca dados do lançamento
         cursor.execute(
             "SELECT funcionario, mes, ano, total_calculado FROM"
             " pagamentos_equipe WHERE id = ?",
@@ -1220,7 +1325,7 @@ elif menu == "👔 Pagamentos de Funcionários":
     st.info("Nenhum pagamento registrado para a equipe ainda.")
 
 # ---------------------------------------------------------
-# 6. RELATÓRIOS (EXCLUSIVO CEO / ADM)
+# 7. RELATÓRIOS (EXCLUSIVO CEO / ADM)
 # ---------------------------------------------------------
 elif menu == "Relatórios":
   st.title("📈 Relatórios e Exportação Avançada")
@@ -1317,7 +1422,7 @@ elif menu == "Relatórios":
     st.info("Não há dados disponíveis para gerar relatórios.")
 
 # ---------------------------------------------------------
-# 7. GERENCIAR USUÁRIOS (EXCLUSIVO CEO / ADM)
+# 8. GERENCIAR USUÁRIOS (EXCLUSIVO CEO / ADM)
 # ---------------------------------------------------------
 elif menu == "👥 Gerenciar Usuários":
   st.title("👥 Gerenciamento de Usuários e Acessos")
@@ -1390,7 +1495,7 @@ elif menu == "👥 Gerenciar Usuários":
         st.rerun()
 
 # ---------------------------------------------------------
-# 8. CALCULADORA COMPLETA DEDICADA
+# 9. CALCULADORA COMPLETA DEDICADA
 # ---------------------------------------------------------
 elif menu == "🧮 Calculadora":
   st.title("🧮 Calculadora Financeira e Contábil SDS")
