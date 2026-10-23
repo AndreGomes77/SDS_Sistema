@@ -107,14 +107,7 @@ def init_db():
   conn = sqlite3.connect("sds_imoveis.db")
   cursor = conn.cursor()
 
-  # Se a tabela 'demandas' já existir na versão antiga, recria de forma limpa
-  cursor.execute("PRAGMA table_info(demandas)")
-  colunas = [coluna[1] for coluna in cursor.fetchall()]
-
-  if "status_parceiro" not in colunas and len(colunas) > 0:
-    cursor.execute("DROP TABLE demandas")
-
-  # Tabela de Demandas Completa
+  # Tabela de Demandas
   cursor.execute("""
         CREATE TABLE IF NOT EXISTS demandas (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -127,12 +120,29 @@ def init_db():
             taxa_desc REAL DEFAULT 0.0,
             pagamento TEXT DEFAULT 'Pendente',
             tipo_imovel TEXT DEFAULT 'Caixa',
+            tipo_servico TEXT DEFAULT 'Intermediação',
             parceria TEXT DEFAULT 'Não',
             parceiro_nome TEXT DEFAULT '',
             pct_sds REAL DEFAULT 100.0,
             status_parceiro TEXT DEFAULT 'Pendente'
         )
     """)
+
+  # Adiciona tipo_servico automaticamente em bancos legados
+  cursor.execute("PRAGMA table_info(demandas)")
+  colunas = [coluna[1] for coluna in cursor.fetchall()]
+
+  colunas_novas = {
+      "tipo_servico": "TEXT DEFAULT 'Intermediação'",
+      "status_parceiro": "TEXT DEFAULT 'Pendente'",
+  }
+
+  for col, tipo in colunas_novas.items():
+    if col not in colunas and len(colunas) > 0:
+      try:
+        cursor.execute(f"ALTER TABLE demandas ADD COLUMN {col} {tipo}")
+      except sqlite3.OperationalError:
+        pass
 
   # Tabela de Utilizadores
   cursor.execute("""
@@ -205,6 +215,9 @@ def carregar_dados():
     df["responsavel"] = df["responsavel"].fillna("")
     df["taxa_desc"] = df["taxa_desc"].fillna(0.0)
     df["tipo_imovel"] = df["tipo_imovel"].fillna("Caixa")
+    if "tipo_servico" not in df.columns:
+      df["tipo_servico"] = "Intermediação"
+    df["tipo_servico"] = df["tipo_servico"].fillna("Intermediação")
     df["parceria"] = df["parceria"].fillna("Não")
     df["parceiro_nome"] = df["parceiro_nome"].fillna("")
     df["pct_sds"] = df["pct_sds"].fillna(100.0)
@@ -514,19 +527,24 @@ elif menu == "Gestão de Demanda":
 
   with st.form("form_demanda", clear_on_submit=True):
     st.subheader("Cadastrar Nova Demanda (ou Demanda Retroativa)")
-    col1, col2 = st.columns(2)
+    col1, col2, col3 = st.columns(3)
     with col1:
       adquirente = st.text_input("Nome do Adquirente")
       numero_imovel = st.text_input("Número do Imóvel / CHB")
-      responsavel = st.text_input("Responsável SDS")
     with col2:
+      responsavel = st.text_input("Responsável SDS")
+      tipo_servico = st.selectbox(
+          "Tipo de Serviço", ["Intermediação", "Assessoramento"], index=0
+      )
+    with col3:
       tipo_imovel = st.selectbox(
           "Tipo de Imóvel", ["Caixa", "Tenda", "Novo", "Usado", "Outros"], index=0
       )
       status = st.selectbox(
           "Status", ["Pendente", "Em Andamento", "Concluída", "Atrasada"]
       )
-      prazo = st.date_input("Data / Prazo de Entrega", datetime.date.today())
+
+    prazo = st.date_input("Data / Prazo de Entrega", datetime.date.today())
 
     st.markdown("**💰 Valores e Taxas / Tratamento Contábil**")
     col_v1, col_v2 = st.columns(2)
@@ -572,8 +590,8 @@ elif menu == "Gestão de Demanda":
         cursor = conn.cursor()
         cursor.execute(
             """
-                    INSERT INTO demandas (adquirente, numero_imovel, responsavel, status, prazo, valor, taxa_desc, pagamento, tipo_imovel, parceria, parceiro_nome, pct_sds, status_parceiro)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Pendente')
+                    INSERT INTO demandas (adquirente, numero_imovel, responsavel, status, prazo, valor, taxa_desc, pagamento, tipo_imovel, tipo_servico, parceria, parceiro_nome, pct_sds, status_parceiro)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Pendente')
                 """,
             (
                 adquirente,
@@ -585,6 +603,7 @@ elif menu == "Gestão de Demanda":
                 taxa_desc,
                 pagamento,
                 tipo_imovel,
+                tipo_servico,
                 parceria,
                 parceiro_nome if parceria == "Sim" else "",
                 pct_sds,
@@ -612,13 +631,17 @@ elif menu == "Gestão de Demanda":
         placeholder="Digite o nome do adquirente ou o número do imóvel...",
     )
 
-    col_f1, col_f2 = st.columns(2)
+    col_f1, col_f2, col_f3 = st.columns(3)
     with col_f1:
       filtro_tipo = st.selectbox(
           "Filtrar por Categoria",
           ["Todos", "Caixa", "Tenda", "Novo", "Usado", "Outros"],
       )
     with col_f2:
+      filtro_servico = st.selectbox(
+          "Filtrar por Serviço", ["Todos", "Intermediação", "Assessoramento"]
+      )
+    with col_f3:
       filtro_parc = st.selectbox(
           "Filtrar por Parceria", ["Todos", "Sim", "Não"]
       )
@@ -635,6 +658,8 @@ elif menu == "Gestão de Demanda":
 
     if filtro_tipo != "Todos":
       df_exibir = df_exibir[df_exibir["tipo_imovel"] == filtro_tipo]
+    if filtro_servico != "Todos":
+      df_exibir = df_exibir[df_exibir["tipo_servico"] == filtro_servico]
     if filtro_parc != "Todos":
       df_exibir = df_exibir[df_exibir["parceria"] == filtro_parc]
 
@@ -643,6 +668,7 @@ elif menu == "Gestão de Demanda":
         "adquirente",
         "numero_imovel",
         "responsavel",
+        "tipo_servico",
         "tipo_imovel",
         "parceiro_nome",
         "status",
@@ -681,6 +707,15 @@ elif menu == "Gestão de Demanda":
           )
 
         with col_e2:
+          servicos_list = ["Intermediação", "Assessoramento"]
+          edit_tipo_servico = st.selectbox(
+              "Tipo de Serviço",
+              servicos_list,
+              index=servicos_list.index(demanda_sel["tipo_servico"])
+              if demanda_sel["tipo_servico"] in servicos_list
+              else 0,
+          )
+
           tipos_list = ["Caixa", "Tenda", "Novo", "Usado", "Outros"]
           edit_tipo_imovel = st.selectbox(
               "Tipo de Imóvel",
@@ -759,7 +794,7 @@ elif menu == "Gestão de Demanda":
           cursor.execute(
               """
                     UPDATE demandas
-                    SET adquirente = ?, numero_imovel = ?, responsavel = ?, tipo_imovel = ?,
+                    SET adquirente = ?, numero_imovel = ?, responsavel = ?, tipo_imovel = ?, tipo_servico = ?,
                         status = ?, prazo = ?, parceria = ?, parceiro_nome = ?, pct_sds = ?,
                         valor = ?, taxa_desc = ?, pagamento = ?
                     WHERE id = ?
@@ -769,6 +804,7 @@ elif menu == "Gestão de Demanda":
                   edit_numero_imovel,
                   edit_responsavel,
                   edit_tipo_imovel,
+                  edit_tipo_servico,
                   edit_status,
                   str(edit_prazo),
                   edit_parceria,
@@ -869,6 +905,7 @@ elif menu == "Faturamento":
         "adquirente",
         "numero_imovel",
         "responsavel",
+        "tipo_servico",
         "tipo_imovel",
         "parceiro_nome",
         "valor",
@@ -925,6 +962,7 @@ elif menu == "🤝 Controle de Repasse a Parceiros":
             "parceiro_nome",
             "adquirente",
             "numero_imovel",
+            "tipo_servico",
             "valor_liquido",
             "Lucro_Parceiro (R$)",
             "status_parceiro",
@@ -964,6 +1002,7 @@ elif menu == "🤝 Controle de Repasse a Parceiros":
           "parceiro_nome",
           "adquirente",
           "numero_imovel",
+          "tipo_servico",
           "valor_liquido",
           "lucro_SDS",
           "Lucro_Parceiro (R$)",
@@ -1386,6 +1425,7 @@ elif menu == "Relatórios":
         "adquirente",
         "numero_imovel",
         "responsavel",
+        "tipo_servico",
         "tipo_imovel",
         "parceiro_nome",
         "valor",
