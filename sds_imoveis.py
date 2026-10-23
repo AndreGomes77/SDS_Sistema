@@ -107,15 +107,15 @@ def init_db():
   conn = sqlite3.connect("sds_imoveis.db")
   cursor = conn.cursor()
 
-  # Tabela de Demandas
+  # Criação robusta da tabela de demandas com todas as colunas padrão
   cursor.execute("""
         CREATE TABLE IF NOT EXISTS demandas (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            adquirente TEXT NOT NULL,
-            numero_imovel TEXT NOT NULL,
-            responsavel TEXT NOT NULL,
-            status TEXT NOT NULL,
-            prazo DATE NOT NULL,
+            adquirente TEXT DEFAULT '',
+            numero_imovel TEXT DEFAULT '',
+            responsavel TEXT DEFAULT '',
+            status TEXT DEFAULT 'Pendente',
+            prazo DATE,
             valor REAL DEFAULT 0.0,
             taxa_desc REAL DEFAULT 0.0,
             pagamento TEXT DEFAULT 'Pendente',
@@ -127,14 +127,19 @@ def init_db():
         )
     """)
 
-  # Garantir atualizações de colunas na tabela demandas de forma segura
+  # Garantir colunas caso a tabela já exista sem alguma delas
   cursor.execute("PRAGMA table_info(demandas)")
   colunas = [coluna[1] for coluna in cursor.fetchall()]
 
   colunas_para_adicionar = {
       "adquirente": "TEXT DEFAULT ''",
       "numero_imovel": "TEXT DEFAULT ''",
+      "responsavel": "TEXT DEFAULT ''",
+      "status": "TEXT DEFAULT 'Pendente'",
+      "prazo": "DATE",
+      "valor": "REAL DEFAULT 0.0",
       "taxa_desc": "REAL DEFAULT 0.0",
+      "pagamento": "TEXT DEFAULT 'Pendente'",
       "tipo_imovel": "TEXT DEFAULT 'Caixa'",
       "parceria": "TEXT DEFAULT 'Não'",
       "parceiro_nome": "TEXT DEFAULT ''",
@@ -212,19 +217,19 @@ def carregar_dados():
   df = pd.read_sql("SELECT * FROM demandas", conn)
   conn.close()
   if not df.empty:
-    df["prazo"] = pd.to_datetime(df["prazo"])
-    df["Ano"] = df["prazo"].dt.year
-    df["Mês"] = df["prazo"].dt.month
+    df["prazo"] = pd.to_datetime(df["prazo"], errors="coerce")
+    df["Ano"] = df["prazo"].dt.year.fillna(datetime.date.today().year)
+    df["Mês"] = df["prazo"].dt.month.fillna(datetime.date.today().month)
     df["adquirente"] = df["adquirente"].fillna("")
     df["numero_imovel"] = df["numero_imovel"].fillna("")
+    df["responsavel"] = df["responsavel"].fillna("")
     df["taxa_desc"] = df["taxa_desc"].fillna(0.0)
     df["tipo_imovel"] = df["tipo_imovel"].fillna("Caixa")
     df["parceria"] = df["parceria"].fillna("Não")
     df["parceiro_nome"] = df["parceiro_nome"].fillna("")
     df["pct_sds"] = df["pct_sds"].fillna(100.0)
-    if "status_parceiro" not in df.columns:
-      df["status_parceiro"] = "Pendente"
     df["status_parceiro"] = df["status_parceiro"].fillna("Pendente")
+    df["valor"] = df["valor"].fillna(0.0)
 
     df["valor_liquido"] = df["valor"] * (1 - df["taxa_desc"] / 100.0)
     df["lucro_SDS"] = df["valor_liquido"] * (df["pct_sds"] / 100.0)
@@ -237,9 +242,11 @@ def carregar_gastos():
   df_g = pd.read_sql("SELECT * FROM gastos", conn)
   conn.close()
   if not df_g.empty:
-    df_g["data_gasto"] = pd.to_datetime(df_g["data_gasto"])
-    df_g["Ano"] = df_g["data_gasto"].dt.year
-    df_g["Mês"] = df_g["data_gasto"].dt.month
+    df_g["data_gasto"] = pd.to_datetime(df_g["data_gasto"], errors="coerce")
+    df_g["Ano"] = df_g["data_gasto"].dt.year.fillna(datetime.date.today().year)
+    df_g["Mês"] = df_g["data_gasto"].dt.month.fillna(
+        datetime.date.today().month
+    )
   return df_g
 
 
@@ -583,39 +590,26 @@ elif menu == "Gestão de Demanda":
       if adquirente and numero_imovel and responsavel:
         conn = sqlite3.connect("sds_imoveis.db")
         cursor = conn.cursor()
-
-        # Inserção Dinâmica para Evitar Erros de Colunas Ausentes no SQLite
-        cursor.execute("PRAGMA table_info(demandas)")
-        cols_existentes = [col[1] for col in cursor.fetchall()]
-
-        dados_insercao = {
-            "adquirente": adquirente,
-            "numero_imovel": numero_imovel,
-            "responsavel": responsavel,
-            "status": status,
-            "prazo": str(prazo),
-            "valor": valor,
-            "taxa_desc": taxa_desc,
-            "pagamento": pagamento,
-            "tipo_imovel": tipo_imovel,
-            "parceria": parceria,
-            "parceiro_nome": parceiro_nome if parceria == "Sim" else "",
-            "pct_sds": pct_sds,
-            "status_parceiro": "Pendente",
-        }
-
-        # Filtra apenas colunas que realmente existem na tabela atual
-        cols_validas = [k for k in dados_insercao.keys() if k in cols_existentes]
-        valores_validos = [dados_insercao[k] for k in cols_validas]
-
-        campos_sql = ", ".join(cols_validas)
-        placeholders = ", ".join(["?"] * len(cols_validas))
-
-        sql_query = (
-            f"INSERT INTO demandas ({campos_sql}) VALUES ({placeholders})"
+        cursor.execute(
+            """
+                    INSERT INTO demandas (adquirente, numero_imovel, responsavel, status, prazo, valor, taxa_desc, pagamento, tipo_imovel, parceria, parceiro_nome, pct_sds, status_parceiro)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Pendente')
+                """,
+            (
+                adquirente,
+                numero_imovel,
+                responsavel,
+                status,
+                str(prazo),
+                valor,
+                taxa_desc,
+                pagamento,
+                tipo_imovel,
+                parceria,
+                parceiro_nome if parceria == "Sim" else "",
+                pct_sds,
+            ),
         )
-        cursor.execute(sql_query, valores_validos)
-
         conn.commit()
         conn.close()
         st.success("Demanda cadastrada com sucesso!")
@@ -1113,7 +1107,7 @@ elif menu == "💸 Gestão de Gastos":
       st.success(f"Gasto ID {id_gasto_del} removido com sucesso!")
       st.rerun()
   else:
-    st.info("Nenum gasto ou despesa cadastrado ainda.")
+    st.info("Nenhum gasto ou despesa cadastrado ainda.")
 
 # ---------------------------------------------------------
 # 6. PAGAMENTOS DE FUNCIONÁRIOS (EXCLUSIVO CEO / ADM)
